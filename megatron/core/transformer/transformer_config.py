@@ -230,8 +230,12 @@ class TransformerConfig(ModelParallelConfig):
     ngpt_sigma_scalars: bool = False
     """nGPT T2: learnable per-output-dim sigma scalars on Q, K, and MLP intermediate."""
 
+    ngpt_logit_scale: bool = False
+    """nGPT: learnable scalar sz that rescales logits (init sqrt(hidden_size)).
+    Auto-enabled by ngpt_architecture; can be turned on independently for ablation."""
+
     ngpt_architecture: bool = False
-    """nGPT T3: normalized residual interpolation; drops pre/final RMSNorm. Implies sigma_scalars."""
+    """nGPT T3: normalized residual interpolation; drops pre/final RMSNorm. Implies sigma_scalars + logit_scale."""
 
     qk_clip: bool = False
     """Whether to clip the query and key weights. Needed for Muon MLA Model training."""

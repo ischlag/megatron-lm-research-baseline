@@ -265,11 +265,16 @@ class GPTModel(LanguageModule):
         if self.pre_process or self.post_process or self.mtp_process:
             self.setup_embeddings_and_output_layer()
 
-        # nGPT T3: learnable scalar `sz` that rescales logits. With unit-row-norm
+        # nGPT: learnable scalar `sz` that rescales logits. With unit-row-norm
         # output_layer weights, raw logits sit in roughly [-1, 1] and softmax
         # over the full vocab is too flat to learn from. Init sqrt(hidden_size)
         # so initial logits are O(sqrt(d)). Only on the post-process rank.
-        if self.config.ngpt_architecture and self.post_process:
+        # Auto-enable under T3 architecture; otherwise keyed off the standalone
+        # --ngpt-logit-scale flag for ablation runs.
+        ngpt_sz_enabled = (
+            self.config.ngpt_architecture or self.config.ngpt_logit_scale
+        )
+        if ngpt_sz_enabled and self.post_process:
             self.ngpt_sz = torch.nn.Parameter(
                 torch.tensor(float(self.config.hidden_size) ** 0.5)
             )
