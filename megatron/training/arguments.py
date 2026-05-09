@@ -110,15 +110,6 @@ def parse_and_validate_args(extra_args_provider=None, ignore_unknown_args=False,
     else:
         validate_args(args, args_defaults)
 
-    # nGPT meta-flag --ngpt-architecture maps to the three atomic flags so
-    # existing T3 sbatches keep working after the residual_interp /
-    # drop_layernorms / logit_scale split. The atomic flags can be set
-    # individually for ablations without inheriting the rest.
-    if getattr(args, "ngpt_architecture", False):
-        args.ngpt_residual_interp = True
-        args.ngpt_drop_layernorms = True
-        args.ngpt_logit_scale = True
-
     # set global args, build tokenizer, and set adlr-autoresume,
     # tensorboard-writer, and timers.
     set_global_variables(args)
@@ -2290,8 +2281,6 @@ def _add_regularization_args(parser):
                        help='Weight decay coefficient for L2 regularization.')
     group.add_argument('--apply-wd-to-qk-layernorm', action='store_true',
                        help='Apply weight decay to qk layernorm as a special case.')
-    # --ngpt-sigma-scalars and --ngpt-architecture are auto-generated from
-    # the corresponding TransformerConfig fields by ArgumentGroupFactory.
     group.add_argument('--clip-grad', type=float, default=1.0,
                        help='Gradient clipping based on global L2 norm.')
     group.add_argument('--adam-beta1', type=float, default=0.9,

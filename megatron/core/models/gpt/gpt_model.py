@@ -265,24 +265,6 @@ class GPTModel(LanguageModule):
         if self.pre_process or self.post_process or self.mtp_process:
             self.setup_embeddings_and_output_layer()
 
-        # nGPT: learnable scalar `sz` that rescales logits. With unit-row-norm
-        # output_layer weights and a unit-norm residual stream, raw logits sit
-        # in [-1, 1] and softmax over the full vocab is too flat to learn from.
-        # Init depends on whether the residual stream is on the unit sphere:
-        #  - With ngpt_residual_interp: ||x||=1, sz=sqrt(hidden) pulls logits
-        #    up to O(1) std.
-        #  - Without (logit_scale alone, e.g. T2-sz): stream has its native
-        #    magnitude; sqrt(hidden) over-amplifies. Init at 1.0.
-        if self.config.ngpt_logit_scale and self.post_process:
-            sz_init = (
-                float(self.config.hidden_size) ** 0.5
-                if self.config.ngpt_residual_interp
-                else 1.0
-            )
-            self.ngpt_sz = torch.nn.Parameter(torch.tensor(sz_init))
-        else:
-            self.ngpt_sz = None
-
         if has_config_logger_enabled(self.config):
             log_config_to_disk(
                 self.config, self.state_dict(), prefix=f'{type(self).__name__}_init_ckpt'
@@ -693,11 +675,6 @@ class GPTModel(LanguageModule):
 
         # Apply MuP output scaling to logits
         logits = self._scale_logits(logits)
-
-        # nGPT T3: rescale logits by the learnable sz scalar so the softmax
-        # has usable temperature over the unit-row-norm output_layer.
-        if self.ngpt_sz is not None:
-            logits = logits * self.ngpt_sz
 
         # Restore sequence parallel execution to the output layer if necessary.
         if sequence_parallel_override:

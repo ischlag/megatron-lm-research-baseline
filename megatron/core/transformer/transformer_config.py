@@ -227,23 +227,10 @@ class TransformerConfig(ModelParallelConfig):
     qk_l2_norm: bool = False
     """Whether to apply llama 4-style qk L2 norm."""
 
-    ngpt_sigma_scalars: bool = False
-    """nGPT T2: learnable per-output-dim sigma scalars on Q, K, and MLP intermediate."""
-
-    ngpt_logit_scale: bool = False
-    """nGPT: learnable scalar sz that rescales logits.
-    Auto-enabled by ngpt_residual_interp; can be turned on independently for ablation."""
-
     ngpt_residual_interp: bool = False
-    """nGPT: normalized residual interpolation x = norm(x + alpha * (norm(f(x)) - x))
-    in place of additive residual. Adds learnable per-layer alpha parameters."""
-
-    ngpt_drop_layernorms: bool = False
-    """nGPT: replace pre/final RMSNorm with IdentityOp (removes their parameters)."""
-
-    ngpt_architecture: bool = False
-    """nGPT T3 meta-flag: enables both residual_interp and drop_layernorms.
-    Mapped to the atomic flags after argparse for back-compat with existing sbatches."""
+    """nGPT-style normalized residual interpolation x = norm(x + alpha * (norm(f(x)) - x))
+    in place of additive residual. Adds learnable per-layer alpha parameters
+    (shape [hidden_size], init 0.05). Reference: arXiv:2410.01131."""
 
     qk_clip: bool = False
     """Whether to clip the query and key weights. Needed for Muon MLA Model training."""

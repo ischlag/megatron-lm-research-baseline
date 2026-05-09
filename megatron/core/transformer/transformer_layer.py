@@ -428,13 +428,6 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
             self.ngpt_alpha_attn = None
             self.ngpt_alpha_mlp = None
 
-        # nGPT drop_layernorms: replace LN modules with IdentityOp so their
-        # parameters are removed (otherwise they'd register for grad sync but
-        # never receive gradients, tripping per_param_grad_ready_counts).
-        if self.config.ngpt_drop_layernorms:
-            self.input_layernorm = IdentityOp()
-            self.pre_mlp_layernorm = IdentityOp()
-
         self.is_moe_layer = isinstance(self.mlp, MoELayer)
 
         self.recompute_input_layernorm = False
@@ -612,41 +605,27 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
 
         inference_context = deprecate_inference_params(inference_context, inference_params)
 
-        # Optional Input Layer norm (skipped when nGPT drops the layernorms;
-        # the residual stream is already normalized by the prior layer's
-        # normalized residual update).
-        if self.config.ngpt_drop_layernorms:
-            input_layernorm_output = hidden_states
-            residual = hidden_states
-        elif self.recompute_input_layernorm:
+        # Optional Input Layer norm
+        if self.recompute_input_layernorm:
             self.input_layernorm_checkpoint = tensor_parallel.CheckpointWithoutOutput()
             with off_interface(self.offload_attn_norm, hidden_states, "attn_norm") as hidden_states:
                 input_layernorm_output = self.input_layernorm_checkpoint.checkpoint(
                     apply_module(self.input_layernorm), hidden_states
                 )
-            if isinstance(input_layernorm_output, tuple):
-                if len(input_layernorm_output) != 2:
-                    raise ValueError(
-                        f"When the output of input_layernorm is a tuple, it is "
-                        f"expected to have 2 elements (output, residual), but "
-                        f"got {len(input_layernorm_output)}"
-                    )
-                input_layernorm_output, residual = input_layernorm_output
-            else:
-                residual = hidden_states
         else:
             with off_interface(self.offload_attn_norm, hidden_states, "attn_norm") as hidden_states:
                 input_layernorm_output = apply_module(self.input_layernorm)(hidden_states)
-            if isinstance(input_layernorm_output, tuple):
-                if len(input_layernorm_output) != 2:
-                    raise ValueError(
-                        f"When the output of input_layernorm is a tuple, it is "
-                        f"expected to have 2 elements (output, residual), but "
-                        f"got {len(input_layernorm_output)}"
-                    )
-                input_layernorm_output, residual = input_layernorm_output
-            else:
-                residual = hidden_states
+
+        if isinstance(input_layernorm_output, tuple):
+            if len(input_layernorm_output) != 2:
+                raise ValueError(
+                    f"When the output of input_layernorm is a tuple, it is "
+                    f"expected to have 2 elements (output, residual), but "
+                    f"got {len(input_layernorm_output)}"
+                )
+            input_layernorm_output, residual = input_layernorm_output
+        else:
+            residual = hidden_states
 
         if self.config.fp32_residual_connection:
             residual = residual.float()
@@ -802,24 +781,19 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         """
 
         # Optional Layer norm post the cross-attention.
-        if self.config.ngpt_drop_layernorms:
-            # Stream is already normalized; skip pre_mlp_layernorm.
-            pre_mlp_layernorm_output = hidden_states
-            residual = hidden_states
-        else:
-            pre_mlp_layernorm_output = self._forward_pre_mlp_layernorm(hidden_states)
+        pre_mlp_layernorm_output = self._forward_pre_mlp_layernorm(hidden_states)
 
-            if isinstance(pre_mlp_layernorm_output, tuple):
-                if len(pre_mlp_layernorm_output) != 2:
-                    raise ValueError(
-                        f"When the output of pre_mlp_layernorm is a tuple, it is "
-                        f"expected to have 2 elements (output, residual), but "
-                        f"got {len(pre_mlp_layernorm_output)}"
-                    )
-                pre_mlp_layernorm_output, residual = pre_mlp_layernorm_output
-            else:
-                # Residual connection.
-                residual = hidden_states
+        if isinstance(pre_mlp_layernorm_output, tuple):
+            if len(pre_mlp_layernorm_output) != 2:
+                raise ValueError(
+                    f"When the output of pre_mlp_layernorm is a tuple, it is "
+                    f"expected to have 2 elements (output, residual), but "
+                    f"got {len(pre_mlp_layernorm_output)}"
+                )
+            pre_mlp_layernorm_output, residual = pre_mlp_layernorm_output
+        else:
+            # Residual connection.
+            residual = hidden_states
 
         if self.config.fp32_residual_connection:
             residual = residual.float()

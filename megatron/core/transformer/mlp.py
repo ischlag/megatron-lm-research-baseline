@@ -239,17 +239,6 @@ class MLP(MegatronModule):
             tp_group=tp_group,
         )
 
-        # nGPT T2: suv scalar on linear_fc1 output before activation. For
-        # SwiGLU (gated_linear_unit), ffn_hidden_size has already been doubled
-        # to cover gate+up. Sized to the TP-local partition. Init sqrt(hidden).
-        if self.config.ngpt_sigma_scalars:
-            tp_size = self.tp_group.size() if self.tp_group is not None else 1
-            local_ffn = ffn_hidden_size // tp_size
-            init_val = float(self.config.hidden_size) ** 0.5
-            self.suv = torch.nn.Parameter(torch.full((local_ffn,), init_val))
-        else:
-            self.suv = None
-
     def forward(
         self, hidden_states: torch.Tensor, per_token_scale: torch.Tensor | None = None, **kwargs
     ):
@@ -258,9 +247,6 @@ class MLP(MegatronModule):
         nvtx_range_push(suffix="linear_fc1")
         intermediate_parallel, bias_parallel = apply_module(self.linear_fc1)(hidden_states)
         nvtx_range_pop(suffix="linear_fc1")
-
-        if self.suv is not None:
-            intermediate_parallel = intermediate_parallel * self.suv
 
         nvtx_range_push(suffix="activation")
         if self.config.use_te_activation_func:

@@ -409,13 +409,6 @@ if __name__ == "__main__":
     except ImportError:
         pass
 
-    # nGPT hyperspherical normalization patch (gated by APERTUS_NGPT_* env vars).
-    try:
-        from _research.ngpt_patch import install as _ngpt_install
-        _ngpt_install()
-    except ImportError:
-        pass
-
     # Temporary for transition to core datasets
     setattr(train_valid_test_datasets_provider, "is_distributed", True)
 
