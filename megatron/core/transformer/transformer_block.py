@@ -846,8 +846,9 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                     if (l_no + layer_offset) in extract_layer_indices:
                         intermediate_hidden_states.append(hidden_states)
 
-        # Final layer norm.
-        if self.final_layernorm is not None:
+        # Final layer norm. Skipped under nGPT T3 (residual stream is already
+        # unit-normalized by every layer's normalized residual update).
+        if self.final_layernorm is not None and not self.config.ngpt_architecture:
             hidden_states = apply_module(self.final_layernorm)(cast(Tensor, hidden_states))
             # TENorm produces a "viewed" tensor. This will result in schedule.py's
             # deallocate_output_tensor() throwing an error, so a viewless tensor is

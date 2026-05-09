@@ -199,6 +199,22 @@ def get_transformer_layer_offset(
     return offset
 
 
+def _ngpt_residual_update(
+    residual: Tensor, output: Tensor, alpha: Tensor, eps: float = 1e-8
+) -> Tensor:
+    """nGPT normalized residual interpolation:
+
+        x = norm(residual + alpha * (norm(output) - residual))
+
+    Norms taken along the last (hidden) dim. ``alpha`` is shape [hidden]
+    so it broadcasts across [s, b, h]. Reference: nGPT (Loshchilov et al,
+    2024, arXiv:2410.01131).
+    """
+    out_norm = output / (output.norm(dim=-1, keepdim=True) + eps)
+    new = residual + alpha * (out_norm - residual)
+    return new / (new.norm(dim=-1, keepdim=True) + eps)
+
+
 @dataclass
 class TransformerLayerSubmodules:
     """
@@ -399,6 +415,19 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # [Module 9: BiasDropoutFusion]
         self.mlp_bda = build_module(submodules.mlp_bda)
 
+        # nGPT T3: per-layer alpha scalars for normalized residual interp.
+        # Shape [hidden_size] broadcast across [s, b, h]. Init 0.05 per nGPT.
+        if self.config.ngpt_architecture:
+            self.ngpt_alpha_attn = torch.nn.Parameter(
+                torch.full((self.config.hidden_size,), 0.05)
+            )
+            self.ngpt_alpha_mlp = torch.nn.Parameter(
+                torch.full((self.config.hidden_size,), 0.05)
+            )
+        else:
+            self.ngpt_alpha_attn = None
+            self.ngpt_alpha_mlp = None
+
         self.is_moe_layer = isinstance(self.mlp, MoELayer)
 
         self.recompute_input_layernorm = False
@@ -576,27 +605,41 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
 
         inference_context = deprecate_inference_params(inference_context, inference_params)
 
-        # Optional Input Layer norm
-        if self.recompute_input_layernorm:
+        # Optional Input Layer norm (skipped under nGPT T3 architecture - the
+        # residual stream is already unit-normalized by the prior layer's
+        # normalized residual update).
+        if self.config.ngpt_architecture:
+            input_layernorm_output = hidden_states
+            residual = hidden_states
+        elif self.recompute_input_layernorm:
             self.input_layernorm_checkpoint = tensor_parallel.CheckpointWithoutOutput()
             with off_interface(self.offload_attn_norm, hidden_states, "attn_norm") as hidden_states:
                 input_layernorm_output = self.input_layernorm_checkpoint.checkpoint(
                     apply_module(self.input_layernorm), hidden_states
                 )
+            if isinstance(input_layernorm_output, tuple):
+                if len(input_layernorm_output) != 2:
+                    raise ValueError(
+                        f"When the output of input_layernorm is a tuple, it is "
+                        f"expected to have 2 elements (output, residual), but "
+                        f"got {len(input_layernorm_output)}"
+                    )
+                input_layernorm_output, residual = input_layernorm_output
+            else:
+                residual = hidden_states
         else:
             with off_interface(self.offload_attn_norm, hidden_states, "attn_norm") as hidden_states:
                 input_layernorm_output = apply_module(self.input_layernorm)(hidden_states)
-
-        if isinstance(input_layernorm_output, tuple):
-            if len(input_layernorm_output) != 2:
-                raise ValueError(
-                    f"When the output of input_layernorm is a tuple, it is "
-                    f"expected to have 2 elements (output, residual), but "
-                    f"got {len(input_layernorm_output)}"
-                )
-            input_layernorm_output, residual = input_layernorm_output
-        else:
-            residual = hidden_states
+            if isinstance(input_layernorm_output, tuple):
+                if len(input_layernorm_output) != 2:
+                    raise ValueError(
+                        f"When the output of input_layernorm is a tuple, it is "
+                        f"expected to have 2 elements (output, residual), but "
+                        f"got {len(input_layernorm_output)}"
+                    )
+                input_layernorm_output, residual = input_layernorm_output
+            else:
+                residual = hidden_states
 
         if self.config.fp32_residual_connection:
             residual = residual.float()
@@ -636,7 +679,12 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
         nvtx_range_push(suffix="self_attn_bda")
-        if using_fused_tp_inference_kernel:
+        if self.config.ngpt_architecture:
+            # nGPT T3: replace bias_dropout_add with normalized residual interp.
+            # Bias is None under --disable-bias-linear; dropout is 0 in nGPT recipe.
+            attn_output = attention_output_with_bias[0]
+            hidden_states = _ngpt_residual_update(residual, attn_output, self.ngpt_alpha_attn)
+        elif using_fused_tp_inference_kernel:
             # In inference optimized transformer layer, there is no bias and dropout
             # The remaining residual add is already handled inside the
             # self attention module.
@@ -747,19 +795,24 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         """
 
         # Optional Layer norm post the cross-attention.
-        pre_mlp_layernorm_output = self._forward_pre_mlp_layernorm(hidden_states)
-
-        if isinstance(pre_mlp_layernorm_output, tuple):
-            if len(pre_mlp_layernorm_output) != 2:
-                raise ValueError(
-                    f"When the output of pre_mlp_layernorm is a tuple, it is "
-                    f"expected to have 2 elements (output, residual), but "
-                    f"got {len(pre_mlp_layernorm_output)}"
-                )
-            pre_mlp_layernorm_output, residual = pre_mlp_layernorm_output
-        else:
-            # Residual connection.
+        if self.config.ngpt_architecture:
+            # nGPT T3: skip pre_mlp_layernorm; stream is already normalized.
+            pre_mlp_layernorm_output = hidden_states
             residual = hidden_states
+        else:
+            pre_mlp_layernorm_output = self._forward_pre_mlp_layernorm(hidden_states)
+
+            if isinstance(pre_mlp_layernorm_output, tuple):
+                if len(pre_mlp_layernorm_output) != 2:
+                    raise ValueError(
+                        f"When the output of pre_mlp_layernorm is a tuple, it is "
+                        f"expected to have 2 elements (output, residual), but "
+                        f"got {len(pre_mlp_layernorm_output)}"
+                    )
+                pre_mlp_layernorm_output, residual = pre_mlp_layernorm_output
+            else:
+                # Residual connection.
+                residual = hidden_states
 
         if self.config.fp32_residual_connection:
             residual = residual.float()
@@ -883,7 +936,11 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
         nvtx_range_push(suffix="mlp_bda")
-        if using_fused_tp_inference_kernel:
+        if self.config.ngpt_architecture:
+            # nGPT T3: normalized residual interp instead of bias_dropout_add.
+            mlp_output = mlp_output_with_bias[0]
+            hidden_states = _ngpt_residual_update(residual, mlp_output, self.ngpt_alpha_mlp)
+        elif using_fused_tp_inference_kernel:
             # In inference optimized transformer layer, there is no bias and dropout
             # The remaining residual add is already handled inside the
             # MLP module.
