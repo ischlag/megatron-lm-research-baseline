@@ -265,6 +265,17 @@ class GPTModel(LanguageModule):
         if self.pre_process or self.post_process or self.mtp_process:
             self.setup_embeddings_and_output_layer()
 
+        # nGPT T3: learnable scalar `sz` that rescales logits. With unit-row-norm
+        # output_layer weights, raw logits sit in roughly [-1, 1] and softmax
+        # over the full vocab is too flat to learn from. Init sqrt(hidden_size)
+        # so initial logits are O(sqrt(d)). Only on the post-process rank.
+        if self.config.ngpt_architecture and self.post_process:
+            self.ngpt_sz = torch.nn.Parameter(
+                torch.tensor(float(self.config.hidden_size) ** 0.5)
+            )
+        else:
+            self.ngpt_sz = None
+
         if has_config_logger_enabled(self.config):
             log_config_to_disk(
                 self.config, self.state_dict(), prefix=f'{type(self).__name__}_init_ckpt'
@@ -675,6 +686,11 @@ class GPTModel(LanguageModule):
 
         # Apply MuP output scaling to logits
         logits = self._scale_logits(logits)
+
+        # nGPT T3: rescale logits by the learnable sz scalar so the softmax
+        # has usable temperature over the unit-row-norm output_layer.
+        if self.ngpt_sz is not None:
+            logits = logits * self.ngpt_sz
 
         # Restore sequence parallel execution to the output layer if necessary.
         if sequence_parallel_override:
