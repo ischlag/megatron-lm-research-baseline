@@ -110,6 +110,15 @@ def parse_and_validate_args(extra_args_provider=None, ignore_unknown_args=False,
     else:
         validate_args(args, args_defaults)
 
+    # nGPT meta-flag --ngpt-architecture maps to the three atomic flags so
+    # existing T3 sbatches keep working after the residual_interp /
+    # drop_layernorms / logit_scale split. The atomic flags can be set
+    # individually for ablations without inheriting the rest.
+    if getattr(args, "ngpt_architecture", False):
+        args.ngpt_residual_interp = True
+        args.ngpt_drop_layernorms = True
+        args.ngpt_logit_scale = True
+
     # set global args, build tokenizer, and set adlr-autoresume,
     # tensorboard-writer, and timers.
     set_global_variables(args)

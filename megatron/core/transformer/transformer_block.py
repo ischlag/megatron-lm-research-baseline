@@ -371,14 +371,14 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
         # @TODO: add back account_for_embedding_in_pipeline_split (see issue #293)
         # In pipeline parallelism, we want to add this LN only to the last stage of the pipeline
         # self.post_process and self.post_layer_norm guide this behavior
-        if self.has_final_layernorm_in_this_stage() and not self.config.ngpt_architecture:
+        if self.has_final_layernorm_in_this_stage() and not self.config.ngpt_drop_layernorms:
             self.final_layernorm = not_none(self.submodules.layer_norm)(
                 config=self.config,
                 hidden_size=self.config.hidden_size,
                 eps=self.config.layernorm_epsilon,
             )
         else:
-            # nGPT T3: residual stream is already unit-normalized; no final LN.
+            # nGPT drop_layernorms: stream already normalized; no final LN.
             self.final_layernorm = None  # Either this or nn.Identity
 
         if self.config.inference_fuse_tp_communication:
@@ -847,9 +847,8 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                     if (l_no + layer_offset) in extract_layer_indices:
                         intermediate_hidden_states.append(hidden_states)
 
-        # Final layer norm. Skipped under nGPT T3 (residual stream is already
-        # unit-normalized by every layer's normalized residual update).
-        if self.final_layernorm is not None and not self.config.ngpt_architecture:
+        # Final layer norm. None when nGPT drop_layernorms is set in __init__.
+        if self.final_layernorm is not None:
             hidden_states = apply_module(self.final_layernorm)(cast(Tensor, hidden_states))
             # TENorm produces a "viewed" tensor. This will result in schedule.py's
             # deallocate_output_tensor() throwing an error, so a viewless tensor is

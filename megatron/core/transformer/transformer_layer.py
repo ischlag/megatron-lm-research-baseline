@@ -415,23 +415,25 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # [Module 9: BiasDropoutFusion]
         self.mlp_bda = build_module(submodules.mlp_bda)
 
-        # nGPT T3: per-layer alpha scalars for normalized residual interp,
-        # plus replace input/pre-MLP layernorms with Identity so their
-        # parameters are removed from the model (otherwise they'd register
-        # for grad sync but never receive gradients, hitting the
-        # per_param_grad_ready_counts assertion).
-        if self.config.ngpt_architecture:
+        # nGPT residual interp: per-layer alpha scalars (shape [hidden],
+        # init 0.05) for x = norm(x + alpha * (norm(f(x)) - x)).
+        if self.config.ngpt_residual_interp:
             self.ngpt_alpha_attn = torch.nn.Parameter(
                 torch.full((self.config.hidden_size,), 0.05)
             )
             self.ngpt_alpha_mlp = torch.nn.Parameter(
                 torch.full((self.config.hidden_size,), 0.05)
             )
-            self.input_layernorm = IdentityOp()
-            self.pre_mlp_layernorm = IdentityOp()
         else:
             self.ngpt_alpha_attn = None
             self.ngpt_alpha_mlp = None
+
+        # nGPT drop_layernorms: replace LN modules with IdentityOp so their
+        # parameters are removed (otherwise they'd register for grad sync but
+        # never receive gradients, tripping per_param_grad_ready_counts).
+        if self.config.ngpt_drop_layernorms:
+            self.input_layernorm = IdentityOp()
+            self.pre_mlp_layernorm = IdentityOp()
 
         self.is_moe_layer = isinstance(self.mlp, MoELayer)
 
@@ -610,10 +612,10 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
 
         inference_context = deprecate_inference_params(inference_context, inference_params)
 
-        # Optional Input Layer norm (skipped under nGPT T3 architecture - the
-        # residual stream is already unit-normalized by the prior layer's
+        # Optional Input Layer norm (skipped when nGPT drops the layernorms;
+        # the residual stream is already normalized by the prior layer's
         # normalized residual update).
-        if self.config.ngpt_architecture:
+        if self.config.ngpt_drop_layernorms:
             input_layernorm_output = hidden_states
             residual = hidden_states
         elif self.recompute_input_layernorm:
@@ -684,8 +686,8 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
         nvtx_range_push(suffix="self_attn_bda")
-        if self.config.ngpt_architecture:
-            # nGPT T3: replace bias_dropout_add with normalized residual interp.
+        if self.config.ngpt_residual_interp:
+            # nGPT: replace bias_dropout_add with normalized residual interp.
             # Bias is None under --disable-bias-linear; dropout is 0 in nGPT recipe.
             attn_output = attention_output_with_bias[0]
             hidden_states = _ngpt_residual_update(residual, attn_output, self.ngpt_alpha_attn)
@@ -800,8 +802,8 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         """
 
         # Optional Layer norm post the cross-attention.
-        if self.config.ngpt_architecture:
-            # nGPT T3: skip pre_mlp_layernorm; stream is already normalized.
+        if self.config.ngpt_drop_layernorms:
+            # Stream is already normalized; skip pre_mlp_layernorm.
             pre_mlp_layernorm_output = hidden_states
             residual = hidden_states
         else:
@@ -941,8 +943,8 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # TODO: could we move `bias_dropout_add_exec_handler` itself
         # inside the module provided in the `bias_dropout_add_spec` module?
         nvtx_range_push(suffix="mlp_bda")
-        if self.config.ngpt_architecture:
-            # nGPT T3: normalized residual interp instead of bias_dropout_add.
+        if self.config.ngpt_residual_interp:
+            # nGPT: normalized residual interp instead of bias_dropout_add.
             mlp_output = mlp_output_with_bias[0]
             hidden_states = _ngpt_residual_update(residual, mlp_output, self.ngpt_alpha_mlp)
         elif using_fused_tp_inference_kernel:

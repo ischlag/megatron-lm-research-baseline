@@ -268,19 +268,15 @@ class GPTModel(LanguageModule):
         # nGPT: learnable scalar `sz` that rescales logits. With unit-row-norm
         # output_layer weights and a unit-norm residual stream, raw logits sit
         # in [-1, 1] and softmax over the full vocab is too flat to learn from.
-        # Init depends on whether the residual stream is normalized:
-        #  - Under T3 architecture: ||x||=1 by construction, so sz=sqrt(hidden)
-        #    pulls logits up to O(1) variance.
-        #  - Without architecture (--ngpt-logit-scale alone): residual stream
-        #    has its native (un-normalized) magnitude, so sqrt(hidden) over-
-        #    amplifies. Init at 1.0 and let the optimizer find the right scale.
-        ngpt_sz_enabled = (
-            self.config.ngpt_architecture or self.config.ngpt_logit_scale
-        )
-        if ngpt_sz_enabled and self.post_process:
+        # Init depends on whether the residual stream is on the unit sphere:
+        #  - With ngpt_residual_interp: ||x||=1, sz=sqrt(hidden) pulls logits
+        #    up to O(1) std.
+        #  - Without (logit_scale alone, e.g. T2-sz): stream has its native
+        #    magnitude; sqrt(hidden) over-amplifies. Init at 1.0.
+        if self.config.ngpt_logit_scale and self.post_process:
             sz_init = (
                 float(self.config.hidden_size) ** 0.5
-                if self.config.ngpt_architecture
+                if self.config.ngpt_residual_interp
                 else 1.0
             )
             self.ngpt_sz = torch.nn.Parameter(torch.tensor(sz_init))
