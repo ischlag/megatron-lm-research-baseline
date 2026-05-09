@@ -415,8 +415,11 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
         # [Module 9: BiasDropoutFusion]
         self.mlp_bda = build_module(submodules.mlp_bda)
 
-        # nGPT T3: per-layer alpha scalars for normalized residual interp.
-        # Shape [hidden_size] broadcast across [s, b, h]. Init 0.05 per nGPT.
+        # nGPT T3: per-layer alpha scalars for normalized residual interp,
+        # plus replace input/pre-MLP layernorms with Identity so their
+        # parameters are removed from the model (otherwise they'd register
+        # for grad sync but never receive gradients, hitting the
+        # per_param_grad_ready_counts assertion).
         if self.config.ngpt_architecture:
             self.ngpt_alpha_attn = torch.nn.Parameter(
                 torch.full((self.config.hidden_size,), 0.05)
@@ -424,6 +427,8 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
             self.ngpt_alpha_mlp = torch.nn.Parameter(
                 torch.full((self.config.hidden_size,), 0.05)
             )
+            self.input_layernorm = IdentityOp()
+            self.pre_mlp_layernorm = IdentityOp()
         else:
             self.ngpt_alpha_attn = None
             self.ngpt_alpha_mlp = None
