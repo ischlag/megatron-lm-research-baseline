@@ -89,8 +89,10 @@ MEGATRON_ARGS=(
     --untie-embeddings-and-output-weights
     --attention-backend auto
     --seq-length 4096
-    # Training: 1B tokens, GBS=128 (524K tokens/step), MBS=16 (DP=4)
-    --micro-batch-size 16
+    # MBS=8 (vs leader's MBS=16) because residual interp retains extra
+    # activations from the per-block norm() calls, OOMing at the fused
+    # cross-entropy with 16. GBS=128 still, just 4 grad-accum steps instead of 2.
+    --micro-batch-size 8
     --global-batch-size 128
     --train-samples 244141
     --exit-duration-in-mins 75
