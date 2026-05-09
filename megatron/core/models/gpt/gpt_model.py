@@ -266,18 +266,24 @@ class GPTModel(LanguageModule):
             self.setup_embeddings_and_output_layer()
 
         # nGPT: learnable scalar `sz` that rescales logits. With unit-row-norm
-        # output_layer weights, raw logits sit in roughly [-1, 1] and softmax
-        # over the full vocab is too flat to learn from. Init sqrt(hidden_size)
-        # so initial logits are O(sqrt(d)). Only on the post-process rank.
-        # Auto-enable under T3 architecture; otherwise keyed off the standalone
-        # --ngpt-logit-scale flag for ablation runs.
+        # output_layer weights and a unit-norm residual stream, raw logits sit
+        # in [-1, 1] and softmax over the full vocab is too flat to learn from.
+        # Init depends on whether the residual stream is normalized:
+        #  - Under T3 architecture: ||x||=1 by construction, so sz=sqrt(hidden)
+        #    pulls logits up to O(1) variance.
+        #  - Without architecture (--ngpt-logit-scale alone): residual stream
+        #    has its native (un-normalized) magnitude, so sqrt(hidden) over-
+        #    amplifies. Init at 1.0 and let the optimizer find the right scale.
         ngpt_sz_enabled = (
             self.config.ngpt_architecture or self.config.ngpt_logit_scale
         )
         if ngpt_sz_enabled and self.post_process:
-            self.ngpt_sz = torch.nn.Parameter(
-                torch.tensor(float(self.config.hidden_size) ** 0.5)
+            sz_init = (
+                float(self.config.hidden_size) ** 0.5
+                if self.config.ngpt_architecture
+                else 1.0
             )
+            self.ngpt_sz = torch.nn.Parameter(torch.tensor(sz_init))
         else:
             self.ngpt_sz = None
 
