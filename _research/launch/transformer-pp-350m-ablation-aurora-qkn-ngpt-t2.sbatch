@@ -86,7 +86,7 @@ MEGATRON_ARGS=(
     --untie-embeddings-and-output-weights
     --attention-backend auto
     --seq-length 4096
-    --micro-batch-size 16
+    --micro-batch-size 8
     --global-batch-size 128
     --train-samples 244141
     --exit-duration-in-mins 55
