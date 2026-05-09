@@ -2281,6 +2281,8 @@ def _add_regularization_args(parser):
                        help='Weight decay coefficient for L2 regularization.')
     group.add_argument('--apply-wd-to-qk-layernorm', action='store_true',
                        help='Apply weight decay to qk layernorm as a special case.')
+    # --ngpt-sigma-scalars and --ngpt-architecture are auto-generated from
+    # the corresponding TransformerConfig fields by ArgumentGroupFactory.
     group.add_argument('--clip-grad', type=float, default=1.0,
                        help='Gradient clipping based on global L2 norm.')
     group.add_argument('--adam-beta1', type=float, default=0.9,

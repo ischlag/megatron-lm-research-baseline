@@ -1421,6 +1421,21 @@ class SelfAttention(Attention):
             else None
         )
 
+        # nGPT T2: per-head-dim sigma scalars for Q and K. Multiplies after
+        # any q_layernorm/k_layernorm. Shape [head_dim] broadcasts across
+        # [s, b, n_heads, head_dim]. Init 1.0 (paper uses base_scale trick
+        # for effective LR, deferred to the optimizer's scalar group here).
+        if self.config.ngpt_sigma_scalars:
+            self.sqk_q = torch.nn.Parameter(
+                torch.ones(self.hidden_size_per_attention_head)
+            )
+            self.sqk_k = torch.nn.Parameter(
+                torch.ones(self.hidden_size_per_attention_head)
+            )
+        else:
+            self.sqk_q = None
+            self.sqk_k = None
+
     def run_realtime_tests(self):
         """Performs a consistency check.
 
@@ -1605,6 +1620,11 @@ class SelfAttention(Attention):
 
         if self.k_layernorm is not None:
             key = apply_module(self.k_layernorm)(key)
+
+        if self.sqk_q is not None:
+            query = query * self.sqk_q
+        if self.sqk_k is not None:
+            key = key * self.sqk_k
 
         if self.config.test_mode:
             self.run_realtime_tests()
