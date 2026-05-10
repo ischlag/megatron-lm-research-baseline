@@ -368,6 +368,19 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
             ]
         )
 
+        # DenseFormer / Depth-Weighted-Average (arXiv 2402.02622).
+        # dwa_weights[l, k] is the coefficient for past_outputs[k] in layer l's
+        # combined output, where past_outputs has block 0 = input embedding and
+        # block 1..n = the n layer outputs. Init to identity (current block only).
+        if self.config.dwa:
+            n = self.config.num_layers
+            self.dwa_weights = torch.nn.Parameter(torch.zeros(n, n + 1))
+            with torch.no_grad():
+                for l in range(n):
+                    self.dwa_weights[l, l + 1] = 1.0
+        else:
+            self.dwa_weights = None
+
         # @TODO: add back account_for_embedding_in_pipeline_split (see issue #293)
         # In pipeline parallelism, we want to add this LN only to the last stage of the pipeline
         # self.post_process and self.post_layer_norm guide this behavior
@@ -802,6 +815,8 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                     # No intermediate_hidden_states requested: just hidden_states
                     hidden_states = checkpointed_result
             else:
+                # DenseFormer DWA: collect past block outputs (block 0 = embedding).
+                dwa_past = [hidden_states] if self.dwa_weights is not None else None
                 for l_no, layer in enumerate(self.layers):
                     # Get appropriate inner quantization context
                     if use_inner_quantization_context:
@@ -833,6 +848,14 @@ class TransformerBlock(GraphableMegatronModule, MegatronModule):
                             packed_seq_params=packed_seq_params,
                             sequence_len_offset=sequence_len_offset,
                             padding_mask=padding_mask,
+                        )
+                    if dwa_past is not None:
+                        dwa_past.append(hidden_states)
+                        l = layer.layer_number - 1
+                        weights = self.dwa_weights[l, : l + 2].to(hidden_states.dtype)
+                        # weighted sum of past_outputs[0..l+1]
+                        hidden_states = sum(
+                            weights[k] * dwa_past[k] for k in range(l + 2)
                         )
 
                     if (

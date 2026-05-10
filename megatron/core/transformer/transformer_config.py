@@ -233,6 +233,13 @@ class TransformerConfig(ModelParallelConfig):
     core_attention. Class-level single-slot register; training-path only (skipped
     in inference). Assumes layers run sequentially within a batch (no PP)."""
 
+    dwa: bool = False
+    """DenseFormer / Depth-Weighted-Average (arXiv 2402.02622). If True, the
+    TransformerBlock keeps a buffer of every past block's output (including the
+    input embedding) and replaces each layer's output with a learnable weighted
+    sum of all past outputs. Adds num_layers * (num_layers+1) scalar parameters
+    and num_layers extra activation references (no PP)."""
+
     qk_l2_norm: bool = False
     """Whether to apply llama 4-style qk L2 norm."""
 
