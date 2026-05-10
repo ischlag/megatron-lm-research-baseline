@@ -227,6 +227,19 @@ class TransformerConfig(ModelParallelConfig):
     qk_layernorm: bool = False
     """Whether to apply `normalization` type of normalization to the query and key embeddings."""
 
+    value_residual: bool = False
+    """ResFormer / value-residual learning (arXiv 2410.17897). If True, layer 1's V
+    is captured and added to the V of every subsequent self-attention layer before
+    core_attention. Class-level single-slot register; training-path only (skipped
+    in inference). Assumes layers run sequentially within a batch (no PP)."""
+
+    dwa: bool = False
+    """DenseFormer / Depth-Weighted-Average (arXiv 2402.02622). If True, the
+    TransformerBlock keeps a buffer of every past block's output (including the
+    input embedding) and replaces each layer's output with a learnable weighted
+    sum of all past outputs. Adds num_layers * (num_layers+1) scalar parameters
+    and num_layers extra activation references (no PP)."""
+
     qk_l2_norm: bool = False
     """Whether to apply llama 4-style qk L2 norm."""
 
