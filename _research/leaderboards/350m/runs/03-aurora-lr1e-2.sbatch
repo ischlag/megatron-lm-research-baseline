@@ -6,14 +6,14 @@
 #            matrix LR 1e-2, scalar LR 1.5e-3, scalar WD 0, spectral scale,
 #            Nesterov, momentum 0.95, polar bf16, pp_iterations=2, pp_beta=0.5,
 #            12-step simple-quintic Newton-Schulz.
-# Final loss: pending   Min loss: pending
-# W&B: pending
-# Executed at git sha: pending
+# Final loss: 1.805   Min loss: 1.697
+# W&B: https://wandb.ai/ischlag/megatron-lm-research-baseline/runs/awmmzpur
+# Executed at git sha: 9e2134654
 #
 # Reference: https://blog.tilderesearch.com/blog/aurora
 #
 # To reproduce bitwise:
-#   git checkout <sha>
+#   git checkout 9e2134654
 #   sbatch _research/leaderboards/350m/runs/03-aurora-lr1e-2.sbatch
 #
 #SBATCH --job-name=350m-aurora-lr1e-2

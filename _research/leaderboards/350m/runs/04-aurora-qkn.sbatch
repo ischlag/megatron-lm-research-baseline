@@ -9,14 +9,14 @@
 # Architecture diff vs aurora-lr1e-2: adds --qk-layernorm (per-head RMSNorm
 # on Q and K). WD stays off on the new q/k norm gains (default rule: shape-1
 # params skip WD).
-# Final loss: pending   Min loss: pending
-# W&B: pending
-# Executed at git sha: pending
+# Final loss: 1.802   Min loss: 1.693
+# W&B: https://wandb.ai/ischlag/megatron-lm-research-baseline/runs/0zg55qes
+# Executed at git sha: 9e2134654
 #
 # Reference: https://blog.tilderesearch.com/blog/aurora
 #
 # To reproduce bitwise:
-#   git checkout <sha>
+#   git checkout 9e2134654
 #   sbatch _research/leaderboards/350m/runs/04-aurora-qkn.sbatch
 #
 #SBATCH --job-name=350m-aurora-qkn

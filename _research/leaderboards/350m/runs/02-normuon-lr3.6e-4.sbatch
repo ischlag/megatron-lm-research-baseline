@@ -4,12 +4,12 @@
 # Scaled-up version of 350m-ablation entry `normuon-lr3.6e-4` (slug carries over).
 # Optimizer: NorMuon (adaptive_muon + normuon moment2), matrix LR 3.6e-4,
 #            scalar LR 1.5e-3, scalar WD 0, spectral scale, Nesterov, mom 0.95.
-# Final loss: pending   Min loss: pending
-# W&B: pending
-# Executed at git sha: pending
+# Final loss: 1.775   Min loss: 1.647
+# W&B: https://wandb.ai/ischlag/megatron-lm-research-baseline/runs/coe7k0xi
+# Executed at git sha: 9e2134654
 #
 # To reproduce bitwise:
-#   git checkout <sha>
+#   git checkout 9e2134654
 #   sbatch _research/leaderboards/350m/runs/02-normuon-lr3.6e-4.sbatch
 #
 #SBATCH --job-name=350m-normuon-lr3.6e-4

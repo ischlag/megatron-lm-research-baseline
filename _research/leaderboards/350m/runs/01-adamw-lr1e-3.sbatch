@@ -4,12 +4,12 @@
 # Scaled-up version of 350m-ablation entry `adamw-lr1e-3` (slug carries over).
 # Optimizer: AdamW (Megatron --optimizer adam = decoupled WD), LR 1e-3,
 #            beta1=0.9, beta2=0.95, WD=0.1.
-# Final loss: pending   Min loss: pending
-# W&B: pending
-# Executed at git sha: pending
+# Final loss: 1.792   Min loss: 1.668
+# W&B: https://wandb.ai/ischlag/megatron-lm-research-baseline/runs/p8g05viv
+# Executed at git sha: 9e2134654
 #
 # To reproduce bitwise:
-#   git checkout <sha>
+#   git checkout 9e2134654
 #   sbatch _research/leaderboards/350m/runs/01-adamw-lr1e-3.sbatch
 #
 #SBATCH --job-name=350m-adamw-lr1e-3
