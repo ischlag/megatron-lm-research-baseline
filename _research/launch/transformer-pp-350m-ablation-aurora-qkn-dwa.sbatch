@@ -86,8 +86,9 @@ MEGATRON_ARGS=(
     --untie-embeddings-and-output-weights
     --attention-backend auto
     --seq-length 4096
-    # Training: 1B tokens, GBS=128 (524K tokens/step), MBS=16 (DP=4)
-    --micro-batch-size 16
+    # Training: 1B tokens, GBS=128 (524K tokens/step), MBS=8 (DP=4, GA=4).
+    # MBS halved vs leader to fit num_layers+1 past-block activation buffers.
+    --micro-batch-size 8
     --global-batch-size 128
     --train-samples 244141
     --exit-duration-in-mins 55
