@@ -13,7 +13,7 @@
 #   sbatch _research/leaderboards/350m/runs/01-adamw-lr1e-3.sbatch
 #
 #SBATCH --job-name=350m-adamw-lr1e-3
-#SBATCH --time=06:00:00
+#SBATCH --time=07:00:00
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline/_research/results/runs/%x-%j.log
 #SBATCH --nodes=2
@@ -91,7 +91,7 @@ MEGATRON_ARGS=(
     --micro-batch-size 16
     --global-batch-size 128
     --train-samples 3662109
-    --exit-duration-in-mins 330
+    --exit-duration-in-mins 380
     --log-interval 1
     --eval-interval 3662109
     --eval-iters 0
