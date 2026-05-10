@@ -273,6 +273,11 @@ class Attention(MegatronModule, ABC):
     "cross attn" specializations.
     """
 
+    # Class-level buffer for value-residual learning (arXiv 2410.17897). Layer 1
+    # writes; layers 2..N read. Cleared implicitly on the next batch's layer 1
+    # forward.
+    _value_residual_buffer: Optional[Tensor] = None
+
     def __init__(
         self,
         config: TransformerConfig,
@@ -1125,6 +1130,15 @@ class Attention(MegatronModule, ABC):
             ), "attention_output_gate is not supported for unsplit mixed_qkv tensor."
             mixed_qkv, qkv_split_arg_list = qkv_output
         nvtx_range_pop(suffix="qkv")
+
+        # Value-residual learning (arXiv 2410.17897). Layer 1 stores its V; layers
+        # 2..N add it. Training-only; assumes split_qkv (standard path) and
+        # sequential layer execution within a batch (no PP).
+        if self.config.value_residual and self.training and split_qkv:
+            if self.layer_number == 1:
+                Attention._value_residual_buffer = value
+            elif Attention._value_residual_buffer is not None:
+                value = value + Attention._value_residual_buffer
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
