@@ -53,7 +53,7 @@ mkdir -p $DATASET_CACHE_DIR $TRITON_CACHE_DIR $TORCHINDUCTOR_CACHE_DIR $TMP_CACH
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n1)
 MASTER_PORT=25678
 
-PROJECT=${WANDB_PROJECT:-megatron-lm-research-baseline}
+PROJECT=megatron-lm-research-baseline
 EXP_NAME=350m-adamw-lr1e-3-$(git rev-parse --short HEAD)
 
 export APERTUS_LOG_DIR=$WORKDIR/_research/results/performance
