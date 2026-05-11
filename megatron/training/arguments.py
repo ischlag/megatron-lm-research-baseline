@@ -2544,6 +2544,16 @@ def _add_training_args(parser):
     group.add_argument('--no-check-for-nan-in-loss-and-grad', action='store_false',
                        help='Check for NaNs in loss and grad',
                        dest='check_for_nan_in_loss_and_grad')
+    group.add_argument('--skip-optimizer-step', action='store_true',
+                       help='[THROUGHPUT PROBE ONLY] Skip the optimizer step '
+                       '(no parameter update, no grad clipping). The optimizer '
+                       'state buffers are still allocated; only the per-step '
+                       'compute cost of the update is removed. Use to measure '
+                       'pure forward + backward + grad-communication throughput, '
+                       'approximating the regime where per-GPU optimizer state '
+                       'cost has been amortized across many DP replicas via '
+                       'FSDP/zero. WARNING: parameters never update; only use '
+                       'for short benchmark runs.')
     group.add_argument('--check-for-large-grads', action='store_true',
                        help='Check for unexpectedly large grads',
                        dest='check_for_large_grads')

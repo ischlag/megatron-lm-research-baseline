@@ -1976,16 +1976,24 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
 
     # Update parameters.
 
-    timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
-
-    # get max attention logit for logging and run clip_qk()
-    # Part of MuonClip Optimizer step
     log_max_attention_logit = 0
-    if args.qk_clip or args.log_max_attention_logit:
-        log_max_attention_logit = clip_qk(model, log_max_only=not args.qk_clip)
+    if args.skip_optimizer_step:
+        # [THROUGHPUT PROBE ONLY] Skip the optimizer step entirely. The state
+        # buffers (master, m, v) are still allocated -- this only removes the
+        # per-step update compute. Approximates the throughput regime where
+        # FSDP/zero has amortized per-GPU optimizer state across many DP
+        # replicas. Parameters do not update; only use for short benchmark runs.
+        update_successful, grad_norm, num_zeros_in_grad = True, 0.0, 0
+    else:
+        timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
+        update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
-    timers('optimizer').stop()
+        # get max attention logit for logging and run clip_qk()
+        # Part of MuonClip Optimizer step
+        if args.qk_clip or args.log_max_attention_logit:
+            log_max_attention_logit = clip_qk(model, log_max_only=not args.qk_clip)
+
+        timers('optimizer').stop()
 
     # Checkpoint params with parameter names.
     if save_params_in_this_iteration:
