@@ -114,10 +114,10 @@ MEGATRON_ARGS=(
     --moe-permute-fusion
     --moe-token-dispatcher-type alltoall
     --moe-per-layer-logging
-    # Training: 15B tokens, GBS=128 (524K tokens/step), MBS=8 (DP=4, 4 grad-accum
+    # Training: 15B tokens, GBS=128 (524K tokens/step), MBS=4 (DP=4, 8 grad-accum
     # steps). 760M-active is bigger than the 350M MoE, so MBS=8 is the upper
-    # end of what fits at hidden=1536; drop to MBS=4 if OOM at startup.
-    --micro-batch-size 8
+    # CE step (logits buffer alone is 6.14 GB at MBS=8); dropping to MBS=4.
+    --micro-batch-size 4
     --global-batch-size 128
     --train-samples 3662109
     --exit-duration-in-mins 710
