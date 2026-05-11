@@ -24,13 +24,13 @@
 #
 # Run length: 15B tokens (D/N_active ~ 20, Chinchilla-like). Per-iter
 # extrapolation from 350M tk1-sh1 (~120-180 TFLOP/s/GPU at 760M) puts
-# the 28,610-iter run at ~24h wall — at the SLURM cap. --save every
-# 1000 iters + --load (auto-resume from latest ckpt) for resilience.
+# the 28,610-iter run at ~24h wall — over the 12h "normal"-partition
+# cap, so --save / --load every 1000 iters and resume via resubmit (2-3 times).
 #
 # Reference: Mixtral 8x7B (Jiang et al., 2024); DeepSeek-V3 shared expert.
 #
 #SBATCH --job-name=760m-active-aurora-qkn-moe-16e-tk1-sh1
-#SBATCH --time=23:59:00
+#SBATCH --time=11:59:00
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline/_research/results/runs/%x-%j.log
 #SBATCH --nodes=1
@@ -120,7 +120,7 @@ MEGATRON_ARGS=(
     --micro-batch-size 8
     --global-batch-size 128
     --train-samples 3662109
-    --exit-duration-in-mins 1430
+    --exit-duration-in-mins 710
     --log-interval 1
     --eval-interval 100000
     --eval-iters 0
@@ -170,7 +170,7 @@ MEGATRON_ARGS=(
     --log-timers-to-tensorboard
     # Checkpointing: save every 1000 iters (~1h at projected throughput);
     # auto-resume from latest ckpt on resubmit. Run can survive a 24h
-    # SLURM cap with one or two resumes.
+    # 12h cap and resume with a fresh resubmit (the --load auto-picks latest).
     --save $WORKDIR/_research/results/runs/ckpt-$SLURM_JOB_NAME
     --load $WORKDIR/_research/results/runs/ckpt-$SLURM_JOB_NAME
     --save-interval 1000
