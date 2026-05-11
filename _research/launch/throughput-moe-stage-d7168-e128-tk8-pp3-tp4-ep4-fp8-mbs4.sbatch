@@ -151,7 +151,7 @@ MEGATRON_ARGS=(
     --expert-model-parallel-size 4
     --expert-tensor-parallel-size 1
     --sequence-parallel
-    --pipeline-model-parallel-layout "E|tt|L"
+    "--pipeline-model-parallel-layout=E|tt|L"
     --context-parallel-size 1
     --use-distributed-optimizer
     --overlap-grad-reduce
