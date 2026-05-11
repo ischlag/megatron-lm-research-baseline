@@ -149,6 +149,8 @@ MEGATRON_ARGS=(
     --seed 42
     --init-method-std 0.02
     --bf16
+    --fp8-format e4m3
+    --fp8-recipe blockwise
     # Distributed: TP=1, PP=1, EP=1, DP=4. AdamW path so --overlap-param-gather
     # is safe to enable (Aurora forbids it for Newton-Schulz). Distributed
     # optimizer shards opt state across DP=4.
