@@ -29,7 +29,7 @@
 #
 # Reference: Mixtral 8x7B (Jiang et al., 2024); DeepSeek-V3 shared expert.
 #
-#SBATCH --job-name=760m-active-aurora-qkn-moe-16e-tk1-sh1-smoke-4node-tp4ep4
+#SBATCH --job-name=760m-active-aurora-qkn-moe-16e-tk1-sh1-smoke-4node-tp4
 #SBATCH --time=00:30:00
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline/_research/results/runs/%x-%j.log
@@ -69,11 +69,11 @@ MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n1)
 MASTER_PORT=25678
 
 PROJECT=${WANDB_PROJECT:-megatron-lm-research-baseline}
-EXP_NAME=760m-active-aurora-qkn-moe-16e-tk1-sh1-smoke-4node-tp4ep4-$(git rev-parse --short HEAD)
+EXP_NAME=760m-active-aurora-qkn-moe-16e-tk1-sh1-smoke-4node-tp4-$(git rev-parse --short HEAD)
 
 export APERTUS_LOG_DIR=$WORKDIR/_research/results/performance
-export APERTUS_FEATURE=transformer-pp-aurora-moe-16e-tk1-sh1-smoke-4node-tp4ep4
-export APERTUS_TRACK=760m-aurora-qkn-moe-16e-tk1-sh1-smoke-4node-tp4ep4
+export APERTUS_FEATURE=transformer-pp-aurora-moe-16e-tk1-sh1-smoke-4node-tp4
+export APERTUS_TRACK=760m-aurora-qkn-moe-16e-tk1-sh1-smoke-4node-tp4
 export APERTUS_RUN_NAME=$EXP_NAME-$SLURM_JOB_ID
 export APERTUS_LOG_ACT_STATS=0
 export APERTUS_LOG_TOP1_ACC=0
@@ -156,7 +156,7 @@ MEGATRON_ARGS=(
     # optimizer shards opt state across DP=4.
     --tensor-model-parallel-size 4
     --pipeline-model-parallel-size 1
-    --expert-model-parallel-size 4
+    --expert-model-parallel-size 1
     --context-parallel-size 1
     --sequence-parallel
     --use-distributed-optimizer
