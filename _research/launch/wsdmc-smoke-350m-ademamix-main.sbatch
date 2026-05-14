@@ -152,7 +152,6 @@ MEGATRON_ARGS=(
     --expert-model-parallel-size 1
     --context-parallel-size 1
     --sequence-parallel
-    --use-distributed-optimizer
     --overlap-grad-reduce
     --save $CKPT_DIR
     --load $CKPT_DIR
