@@ -1448,7 +1448,7 @@ def validate_args(args, defaults={}):
 
     # emerging optimizer check
     args.use_layer_wise_distributed_optimizer = False
-    if args.optimizer not in ('sgd', 'adam'):
+    if args.optimizer not in ('sgd', 'adam', 'ademamix'):
         if args.optimizer == 'dist_muon':
             warn_rank_0(
                 "optimizer='dist_muon' is deprecated. "
