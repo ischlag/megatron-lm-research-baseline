@@ -965,7 +965,7 @@ def get_megatron_optimizer(
 
     # TODO: the standard and emerging optimizer paths handle pg_collection differently;
     # unify them so both use a single pg_collection-based flow.
-    if config.optimizer not in ('adam', 'sgd'):
+    if config.optimizer not in ('adam', 'sgd', 'ademamix'):
         return _get_megatron_emerging_optimizer(
             config=config,
             model_chunks=model_chunks,
