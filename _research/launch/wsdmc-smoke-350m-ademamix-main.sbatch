@@ -25,8 +25,8 @@
 #
 #SBATCH --job-name=wsdmc-smoke-350m-ademamix
 #SBATCH --time=00:45:00
-#SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-wsdmc/_research/results/runs/%x-%j.log
-#SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-wsdmc/_research/results/runs/%x-%j.log
+#SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
+#SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
@@ -39,7 +39,7 @@ set -euo pipefail
 echo "START TIME: $(date)"
 export APERTUS_PHASE_SBATCH_START=$(date +%s.%N)
 
-WORKDIR=${SLURM_SUBMIT_DIR:-/iopsstor/scratch/cscs/$USER/megatron-lm-research-baseline-wsdmc}
+WORKDIR=${SLURM_SUBMIT_DIR:-/iopsstor/scratch/cscs/$USER/megatron-lm-research-baseline-ademamix}
 REPO_DIR=$WORKDIR
 cd $WORKDIR
 
