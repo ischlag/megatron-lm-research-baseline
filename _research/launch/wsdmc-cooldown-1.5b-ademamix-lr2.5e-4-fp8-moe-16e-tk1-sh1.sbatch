@@ -12,7 +12,7 @@
 #SBATCH --job-name=wsdmc-cooldown-1.5b-ademamix-lr2.5e-4-fp8-moe-16e-tk1-sh1
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
-#SBATCH --nodes=4
+#SBATCH --nodes=16
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=72
@@ -59,6 +59,32 @@ ENDPOINT_GB=$(awk "BEGIN {printf \"%.1f\", $ENDPOINT_TOKENS / 1e9}")
 COOLDOWN_NAME="$WSDMC_EXP_NAME-cd-${ENDPOINT_GB}B"
 COOLDOWN_CKPT_DIR=$WORKDIR/_research/results/ckpts/$COOLDOWN_NAME
 mkdir -p $COOLDOWN_CKPT_DIR
+
+# Resume support: if a cooldown checkpoint already exists in
+# $COOLDOWN_CKPT_DIR (a prior chained link of this same cooldown),
+# auto-resume from it; otherwise load from the main ckpt at the
+# requested iter. --override-opt_param-scheduler is only needed on
+# the first link (when transitioning the scheduler from main->cooldown).
+if [ -f "$COOLDOWN_CKPT_DIR/latest_checkpointed_iteration.txt" ]; then
+    LOAD_ARGS=("--load" "$COOLDOWN_CKPT_DIR")
+    SCHED_ARGS=()
+else
+    LOAD_ARGS=("--load" "$WSDMC_CKPT_DIR" "--ckpt-step" "$WSDMC_CKPT_ITER")
+    SCHED_ARGS=("--override-opt_param-scheduler")
+fi
+
+# Resume support: if a cooldown checkpoint already exists in
+# $COOLDOWN_CKPT_DIR (a prior chained link of this same cooldown),
+# auto-resume from it; otherwise load from the main ckpt at the
+# requested iter. --override-opt_param-scheduler is only needed on
+# the first link (when transitioning the scheduler from main->cooldown).
+if [ -f "$COOLDOWN_CKPT_DIR/latest_checkpointed_iteration.txt" ]; then
+    LOAD_ARGS=("--load" "$COOLDOWN_CKPT_DIR")
+    SCHED_ARGS=()
+else
+    LOAD_ARGS=("--load" "$WSDMC_CKPT_DIR" "--ckpt-step" "$WSDMC_CKPT_ITER")
+    SCHED_ARGS=("--override-opt_param-scheduler")
+fi
 
 TRAIN_ITERS_TOTAL=$(( WSDMC_CKPT_ITER + WSDMC_COOLDOWN_ITERS ))
 TRAIN_SAMPLES=$(( TRAIN_ITERS_TOTAL * 128 ))
@@ -138,24 +164,24 @@ MEGATRON_ARGS=(
     --lr-wsd-decay-style minus_sqrt
     --lr-decay-samples $LR_DECAY_SAMPLES
     --lr-wsd-decay-samples $LR_WSD_DECAY_SAMPLES
-    --override-opt_param-scheduler
+    "${SCHED_ARGS[@]}"
     --seed 42
     --init-method-std 0.02
     --bf16
     --fp8-format e4m3
     --fp8-recipe blockwise
-    --tensor-model-parallel-size 4
+    --tensor-model-parallel-size 2
     --pipeline-model-parallel-size 1
-    --expert-model-parallel-size 4
+    --expert-model-parallel-size 2
+    --expert-tensor-parallel-size 1
     --context-parallel-size 1
     --sequence-parallel
     --use-distributed-optimizer
     --overlap-grad-reduce
-    --overlap-param-gather
-    --load $WSDMC_CKPT_DIR
-    --ckpt-step $WSDMC_CKPT_ITER
+    "${LOAD_ARGS[@]}"
     --save $COOLDOWN_CKPT_DIR
-    --save-interval $WSDMC_COOLDOWN_ITERS
+    --save-interval 5000
+    --exit-duration-in-mins 600
     --ckpt-format torch_dist
     --log-throughput
     --log-progress

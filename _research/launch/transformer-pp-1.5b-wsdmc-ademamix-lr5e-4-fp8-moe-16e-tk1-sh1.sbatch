@@ -49,7 +49,7 @@
 #SBATCH --time=11:00:00
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
-#SBATCH --nodes=4
+#SBATCH --nodes=16
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=72
@@ -169,14 +169,14 @@ MEGATRON_ARGS=(
     --bf16
     --fp8-format e4m3
     --fp8-recipe blockwise
-    --tensor-model-parallel-size 4
+    --tensor-model-parallel-size 2
     --pipeline-model-parallel-size 1
-    --expert-model-parallel-size 4
+    --expert-model-parallel-size 2
+    --expert-tensor-parallel-size 1
     --context-parallel-size 1
     --sequence-parallel
     --use-distributed-optimizer
     --overlap-grad-reduce
-    --overlap-param-gather
     --save $CKPT_DIR
     --load $CKPT_DIR
     --save-interval 4578

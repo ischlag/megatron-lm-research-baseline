@@ -47,9 +47,9 @@
 #
 #SBATCH --job-name=1.5b-wsdmc-adamw-lr5e-4-fp8-moe-16e-tk1-sh1
 #SBATCH --time=11:00:00
-#SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-wsdmc/_research/results/runs/%x-%j.log
-#SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-wsdmc/_research/results/runs/%x-%j.log
-#SBATCH --nodes=4
+#SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
+#SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
+#SBATCH --nodes=16
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=72
@@ -61,7 +61,7 @@ set -euo pipefail
 echo "START TIME: $(date)"
 export APERTUS_PHASE_SBATCH_START=$(date +%s.%N)
 
-WORKDIR=${SLURM_SUBMIT_DIR:-/iopsstor/scratch/cscs/$USER/megatron-lm-research-baseline-wsdmc}
+WORKDIR=${SLURM_SUBMIT_DIR:-/iopsstor/scratch/cscs/$USER/megatron-lm-research-baseline-ademamix}
 REPO_DIR=$WORKDIR
 cd $WORKDIR
 
@@ -134,10 +134,10 @@ MEGATRON_ARGS=(
     --moe-per-layer-logging
     --micro-batch-size 4
     --global-batch-size 128
-    --train-samples 2929920
+    --train-samples 11719680
     --exit-duration-in-mins 600
     --log-interval 1
-    --eval-interval 2929920
+    --eval-interval 11719680
     --eval-iters 0
     --optimizer adam
     --dataloader-type single
@@ -157,21 +157,22 @@ MEGATRON_ARGS=(
     --lr-decay-style WSD
     --lr-warmup-samples 25600
     --lr-wsd-decay-style minus_sqrt
-    --lr-decay-samples 5859840
+    --lr-decay-samples 50000000
     --lr-wsd-decay-samples 1024
+    --override-opt_param-scheduler
     --seed 42
     --init-method-std 0.02
     --bf16
     --fp8-format e4m3
     --fp8-recipe blockwise
-    --tensor-model-parallel-size 4
+    --tensor-model-parallel-size 2
     --pipeline-model-parallel-size 1
-    --expert-model-parallel-size 4
+    --expert-model-parallel-size 2
+    --expert-tensor-parallel-size 1
     --context-parallel-size 1
     --sequence-parallel
     --use-distributed-optimizer
     --overlap-grad-reduce
-    --overlap-param-gather
     --save $CKPT_DIR
     --load $CKPT_DIR
     --save-interval 4578

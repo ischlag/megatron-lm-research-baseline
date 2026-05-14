@@ -1,15 +1,52 @@
 #!/bin/bash
 #
-# Cooldown sbatch paired with
-# transformer-pp-1.5b-wsdmc-ademamix-lr5e-4-fp8-moe-16e-tk1-sh1.sbatch.
-# Architecture and optimizer block must match the main run exactly.
-# Schedule, save, load, exit-duration, and warmup are overridden via
-# --override-opt_param-scheduler.
+# 1.5B-active MoE wsdmc production run (largest N point for D/N curve).
+#   Architecture: 16 routed experts top-1 + 1 shared, all width 2560
+#                 (Switch-routing with shared backstop, iso-active to dense).
+#                 32 layers, hidden 2048, attn heads 32 (head_dim 64), GQA 8.
+#                 Aspect ratio 32/2048 ~ 24/1536 of the 760M; sqrt(2)x wider
+#                 and 4/3x deeper.
+#                 Per-layer FFN active = (1 routed + 1 shared) * 3 * 2048 * 2560 = 31.46M
+#                                        (matches dense reference 3 * 2048 * 5120)
+#                 Per-layer FFN total  = (16 + 1) * 3 * 2048 * 2560 = 267.6M
+#   Active params: ~1.55B.  Total params: ~9.1B.
+#   Sparsity K_routed/E_routed = 1/16 = 6.25% (matches 175M/350M/760M).
 #
-# Parameters via env (set by submit-wsdmc.sh):
-#   WSDMC_CKPT_DIR / WSDMC_CKPT_ITER / WSDMC_COOLDOWN_ITERS / WSDMC_EXP_NAME
+#   Optimizer: AdamW at lr=5e-4 (parity with 760M / 350M / 175M AdamW
+#   lr=5e-4 chains; serves as D/N curve anchor).
 #
-#SBATCH --job-name=wsdmc-cooldown-1.5b-ademamix-lr5e-4-fp8-moe-16e-tk1-sh1
+#   Parallelism (4 nodes, 16 GPUs):
+#     TP=4 (intra-node NVLink across all 4 GPUs/node)
+#     EP=4 (cross-node alltoall for routed experts)
+#     ETP defaults to TP=4 (so each routed expert is sharded ETP*EP=16-way)
+#     PP=1, CP=1
+#     Decoder: TP=4, DP=4 (16 = TP*DP)
+#     Expert:  ETP=4, EP=4, EDP=1 (16 = ETP*EP*EDP) -- Decoder DP=EDP=4 matches.
+#   MBS=4, GBS=128 -> 4 grad-accum steps per attention DP rank.
+#   Smoke at this config: ~5.9 s/iter (~59 TFLOP/s/GPU). Main wall ~38h;
+#   submit with WSDMC_N_MAIN_JOBS=4 (each 11h link runs ~10h training then
+#   auto-saves and exits; next link auto-resumes via --load=--save).
+#   Tried 8 nodes TP=4 EP=4 (EDP=2): NCCL-OFI ep_create failed at MoE metric
+#   tracker init. Staying at 4 nodes EDP=1 to keep Decoder DP = EDP.
+#
+#   WSDMC schedule (round endpoints {3, 6, 9, 12, 15}B):
+#     l/(t+l) = 0.2  =>  l = 0.25 * t (cooldown is 20% of the WSD
+#     endpoint's total length, MiniCPM-style)
+#     save-interval = 4578 iters  =>  saves at {4578, 9156, 13734, 18312, 22890}
+#     train-iters = 22890 (= 5 * save-interval; main stops at 12B tokens)
+#   Each cooldown extends its save into a real WSD endpoint:
+#     ckpt @  4578 (2.4B)  + cd 1144 (0.6B)  ->  3.0B
+#     ckpt @  9156 (4.8B)  + cd 2289 (1.2B)  ->  6.0B
+#     ckpt @ 13734 (7.2B)  + cd 3434 (1.8B)  ->  9.0B
+#     ckpt @ 18312 (9.6B)  + cd 4578 (2.4B)  -> 12.0B
+#     ckpt @ 22890 (12.0B) + cd 5722 (3.0B)  -> 15.0B
+#   Total spend: 12B main + 9B cooldowns = 21B tokens.
+#
+#   Two-job chain: each link runs 600 min (exit-duration) then Megatron
+#   auto-saves and exits clean; the next link resumes via --load=--save.
+#
+#SBATCH --job-name=1.5b-wsdmc-adamw-lr1e-3-fp8-moe-16e-tk1-sh1
+#SBATCH --time=11:00:00
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --nodes=16
@@ -21,11 +58,6 @@
 
 set -euo pipefail
 : "${MEGATRON_DATA_PATH:?please set MEGATRON_DATA_PATH}"
-: "${WSDMC_CKPT_DIR:?missing WSDMC_CKPT_DIR}"
-: "${WSDMC_CKPT_ITER:?missing WSDMC_CKPT_ITER}"
-: "${WSDMC_COOLDOWN_ITERS:?missing WSDMC_COOLDOWN_ITERS}"
-: "${WSDMC_EXP_NAME:?missing WSDMC_EXP_NAME}"
-
 echo "START TIME: $(date)"
 export APERTUS_PHASE_SBATCH_START=$(date +%s.%N)
 
@@ -53,35 +85,14 @@ MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n1)
 MASTER_PORT=25678
 
 PROJECT=${WANDB_PROJECT:-megatron-lm-research-baseline}
-
-ENDPOINT_TOKENS=$(( (WSDMC_CKPT_ITER + WSDMC_COOLDOWN_ITERS) * 524288 ))
-ENDPOINT_GB=$(awk "BEGIN {printf \"%.1f\", $ENDPOINT_TOKENS / 1e9}")
-COOLDOWN_NAME="$WSDMC_EXP_NAME-cd-${ENDPOINT_GB}B"
-COOLDOWN_CKPT_DIR=$WORKDIR/_research/results/ckpts/$COOLDOWN_NAME
-mkdir -p $COOLDOWN_CKPT_DIR
-
-# Resume support: if a cooldown checkpoint already exists in
-# $COOLDOWN_CKPT_DIR (a prior chained link of this same cooldown),
-# auto-resume from it; otherwise load from the main ckpt at the
-# requested iter. --override-opt_param-scheduler is only needed on
-# the first link (when transitioning the scheduler from main->cooldown).
-if [ -f "$COOLDOWN_CKPT_DIR/latest_checkpointed_iteration.txt" ]; then
-    LOAD_ARGS=("--load" "$COOLDOWN_CKPT_DIR")
-    SCHED_ARGS=()
-else
-    LOAD_ARGS=("--load" "$WSDMC_CKPT_DIR" "--ckpt-step" "$WSDMC_CKPT_ITER")
-    SCHED_ARGS=("--override-opt_param-scheduler")
-fi
-
-TRAIN_ITERS_TOTAL=$(( WSDMC_CKPT_ITER + WSDMC_COOLDOWN_ITERS ))
-TRAIN_SAMPLES=$(( TRAIN_ITERS_TOTAL * 128 ))
-LR_DECAY_SAMPLES=$TRAIN_SAMPLES
-LR_WSD_DECAY_SAMPLES=$(( WSDMC_COOLDOWN_ITERS * 128 ))
+EXP_NAME=${WSDMC_EXP_NAME:-1.5b-wsdmc-adamw-lr1e-3-fp8-moe-16e-tk1-sh1-$(git rev-parse --short HEAD)}
+CKPT_DIR=${WSDMC_CKPT_DIR:-$WORKDIR/_research/results/ckpts/$EXP_NAME}
+mkdir -p $CKPT_DIR
 
 export APERTUS_LOG_DIR=$WORKDIR/_research/results/performance
-export APERTUS_FEATURE=transformer-pp-ademamix-fp8-moe-16e-tk1-sh1-wsdmc
-export APERTUS_TRACK=1.5b-wsdmc-cooldowns
-export APERTUS_RUN_NAME=$COOLDOWN_NAME-$SLURM_JOB_ID
+export APERTUS_FEATURE=transformer-pp-adamw-fp8-moe-16e-tk1-sh1-wsdmc
+export APERTUS_TRACK=1.5b-wsdmc
+export APERTUS_RUN_NAME=$EXP_NAME-$SLURM_JOB_ID
 export APERTUS_LOG_ACT_STATS=1
 export APERTUS_LOG_TOP1_ACC=1
 export APERTUS_LOG_ROW_CV=1
@@ -123,15 +134,12 @@ MEGATRON_ARGS=(
     --moe-per-layer-logging
     --micro-batch-size 4
     --global-batch-size 128
-    --train-samples $TRAIN_SAMPLES
+    --train-samples 11719680
+    --exit-duration-in-mins 600
     --log-interval 1
-    --eval-interval $TRAIN_SAMPLES
+    --eval-interval 11719680
     --eval-iters 0
-    --optimizer ademamix
-    --ademamix-beta3 0.9999
-    --ademamix-alpha 5
-    --ademamix-beta3-warmup -1
-    --ademamix-alpha-warmup -1
+    --optimizer adam
     --dataloader-type single
     --manual-gc
     --manual-gc-interval 50
@@ -144,14 +152,14 @@ MEGATRON_ARGS=(
     --clip-grad 1.0
     --adam-beta1 0.9
     --adam-beta2 0.95
-    --lr 5e-4
-    --min-lr 5e-5
+    --lr 1e-3
+    --min-lr 1e-4
     --lr-decay-style WSD
-    --lr-warmup-samples 0
+    --lr-warmup-samples 25600
     --lr-wsd-decay-style minus_sqrt
-    --lr-decay-samples $LR_DECAY_SAMPLES
-    --lr-wsd-decay-samples $LR_WSD_DECAY_SAMPLES
-    "${SCHED_ARGS[@]}"
+    --lr-decay-samples 50000000
+    --lr-wsd-decay-samples 1024
+    --override-opt_param-scheduler
     --seed 42
     --init-method-std 0.02
     --bf16
@@ -165,10 +173,9 @@ MEGATRON_ARGS=(
     --sequence-parallel
     --use-distributed-optimizer
     --overlap-grad-reduce
-    "${LOAD_ARGS[@]}"
-    --save $COOLDOWN_CKPT_DIR
-    --save-interval 5000
-    --exit-duration-in-mins 600
+    --save $CKPT_DIR
+    --load $CKPT_DIR
+    --save-interval 4578
     --ckpt-format torch_dist
     --log-throughput
     --log-progress
@@ -189,8 +196,8 @@ MEGATRON_ARGS=(
 MEGATRON_ARGS_STR="${MEGATRON_ARGS[@]}"
 if [ -n "${WANDB_API_KEY:-}" ]; then
     export WANDB_PROJECT=$PROJECT
-    export WANDB_NAME=$COOLDOWN_NAME-$SLURM_JOB_ID
-    MEGATRON_ARGS_STR="$MEGATRON_ARGS_STR --wandb-project $PROJECT --wandb-exp-name $COOLDOWN_NAME-$SLURM_JOB_ID --wandb-save-dir $WORKDIR/_research/results/runs"
+    export WANDB_NAME=$EXP_NAME-$SLURM_JOB_ID
+    MEGATRON_ARGS_STR="$MEGATRON_ARGS_STR --wandb-project $PROJECT --wandb-exp-name $EXP_NAME-$SLURM_JOB_ID --wandb-save-dir $WORKDIR/_research/results/runs"
 else
     export WANDB_MODE=disabled
 fi
@@ -207,14 +214,8 @@ ENV_SETUP="export MASTER_ADDR=$MASTER_ADDR; \
 TRAINING_CMD="bash $WORKDIR/_research/launch/install_python_deps.sh $PACKAGE_DIR && python3 $WORKDIR/pretrain_gpt.py $MEGATRON_ARGS_STR"
 
 echo "CMD: $TRAINING_CMD"
-echo "COOLDOWN_NAME: $COOLDOWN_NAME"
-echo "  load:                 $WSDMC_CKPT_DIR (iter $WSDMC_CKPT_ITER)"
-echo "  cooldown_iters:       $WSDMC_COOLDOWN_ITERS"
-echo "  endpoint_tokens:      $ENDPOINT_TOKENS (~${ENDPOINT_GB}B)"
-echo "  train_samples:        $TRAIN_SAMPLES"
-echo "  lr_wsd_decay_samples: $LR_WSD_DECAY_SAMPLES"
-echo "  save:                 $COOLDOWN_CKPT_DIR"
-
+echo "CKPT_DIR: $CKPT_DIR"
+echo "EXP_NAME: $EXP_NAME"
 export APERTUS_PHASE_PRE_SRUN=$(date +%s.%N)
 srun -lu --mpi=pmix --network=disable_rdzv_get --environment=$WORKDIR/_research/launch/alps3.toml \
     --cpus-per-task $SLURM_CPUS_PER_TASK --wait 120 \

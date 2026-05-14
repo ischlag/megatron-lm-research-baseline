@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Cooldown sbatch paired with
-# transformer-pp-1.5b-wsdmc-ademamix-lr5e-4-fp8-moe-16e-tk1-sh1.sbatch.
+# transformer-pp-1.5b-wsdmc-adamw-lr2.5e-4-fp8-moe-16e-tk1-sh1.sbatch.
 # Architecture and optimizer block must match the main run exactly.
 # Schedule, save, load, exit-duration, and warmup are overridden via
 # --override-opt_param-scheduler.
@@ -9,7 +9,7 @@
 # Parameters via env (set by submit-wsdmc.sh):
 #   WSDMC_CKPT_DIR / WSDMC_CKPT_ITER / WSDMC_COOLDOWN_ITERS / WSDMC_EXP_NAME
 #
-#SBATCH --job-name=wsdmc-cooldown-1.5b-ademamix-lr5e-4-fp8-moe-16e-tk1-sh1
+#SBATCH --job-name=wsdmc-cooldown-1.5b-adamw-lr2.5e-4-fp8-moe-16e-tk1-sh1
 #SBATCH --output=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --error=/iopsstor/scratch/cscs/%u/megatron-lm-research-baseline-ademamix/_research/results/runs/%x-%j.log
 #SBATCH --nodes=16
@@ -73,13 +73,26 @@ else
     SCHED_ARGS=("--override-opt_param-scheduler")
 fi
 
+# Resume support: if a cooldown checkpoint already exists in
+# $COOLDOWN_CKPT_DIR (a prior chained link of this same cooldown),
+# auto-resume from it; otherwise load from the main ckpt at the
+# requested iter. --override-opt_param-scheduler is only needed on
+# the first link (when transitioning the scheduler from main->cooldown).
+if [ -f "$COOLDOWN_CKPT_DIR/latest_checkpointed_iteration.txt" ]; then
+    LOAD_ARGS=("--load" "$COOLDOWN_CKPT_DIR")
+    SCHED_ARGS=()
+else
+    LOAD_ARGS=("--load" "$WSDMC_CKPT_DIR" "--ckpt-step" "$WSDMC_CKPT_ITER")
+    SCHED_ARGS=("--override-opt_param-scheduler")
+fi
+
 TRAIN_ITERS_TOTAL=$(( WSDMC_CKPT_ITER + WSDMC_COOLDOWN_ITERS ))
 TRAIN_SAMPLES=$(( TRAIN_ITERS_TOTAL * 128 ))
 LR_DECAY_SAMPLES=$TRAIN_SAMPLES
 LR_WSD_DECAY_SAMPLES=$(( WSDMC_COOLDOWN_ITERS * 128 ))
 
 export APERTUS_LOG_DIR=$WORKDIR/_research/results/performance
-export APERTUS_FEATURE=transformer-pp-ademamix-fp8-moe-16e-tk1-sh1-wsdmc
+export APERTUS_FEATURE=transformer-pp-adamw-fp8-moe-16e-tk1-sh1-wsdmc
 export APERTUS_TRACK=1.5b-wsdmc-cooldowns
 export APERTUS_RUN_NAME=$COOLDOWN_NAME-$SLURM_JOB_ID
 export APERTUS_LOG_ACT_STATS=1
@@ -127,11 +140,7 @@ MEGATRON_ARGS=(
     --log-interval 1
     --eval-interval $TRAIN_SAMPLES
     --eval-iters 0
-    --optimizer ademamix
-    --ademamix-beta3 0.9999
-    --ademamix-alpha 5
-    --ademamix-beta3-warmup -1
-    --ademamix-alpha-warmup -1
+    --optimizer adam
     --dataloader-type single
     --manual-gc
     --manual-gc-interval 50
@@ -144,8 +153,8 @@ MEGATRON_ARGS=(
     --clip-grad 1.0
     --adam-beta1 0.9
     --adam-beta2 0.95
-    --lr 5e-4
-    --min-lr 5e-5
+    --lr 2.5e-4
+    --min-lr 2.5e-5
     --lr-decay-style WSD
     --lr-warmup-samples 0
     --lr-wsd-decay-style minus_sqrt
