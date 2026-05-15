@@ -175,7 +175,7 @@ MEGATRON_ARGS=(
     --overlap-grad-reduce
     --save $CKPT_DIR
     --load $CKPT_DIR
-    --save-interval 1000
+    --save-interval 1145
     --ckpt-format torch_dist
     --log-throughput
     --log-progress
