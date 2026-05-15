@@ -48,9 +48,13 @@ for ((i=1; i<=N_MAIN_JOBS; i++)); do
     if [ -z "$LAST_MAIN_JID" ]; then
         JID=$(sbatch --parsable --export=ALL,WSDMC_EXP_NAME=$EXP_NAME,WSDMC_CKPT_DIR=$CKPT_DIR "$MAIN_SBATCH")
     else
-        JID=$(sbatch --parsable --dependency=afterok:$LAST_MAIN_JID --export=ALL,WSDMC_EXP_NAME=$EXP_NAME,WSDMC_CKPT_DIR=$CKPT_DIR "$MAIN_SBATCH")
+        # afterany: continue chain even if previous link crashed (NCCL hang,
+        # node fault). Each link uses --load=--save so it auto-resumes from
+        # latest_checkpointed_iteration.txt. Cooldowns still use afterok the
+        # final main link, which exits clean only when consumed >= train_samples.
+        JID=$(sbatch --parsable --dependency=afterany:$LAST_MAIN_JID --export=ALL,WSDMC_EXP_NAME=$EXP_NAME,WSDMC_CKPT_DIR=$CKPT_DIR "$MAIN_SBATCH")
     fi
-    echo "Submitted MAIN $i/$N_MAIN_JOBS: jobid=$JID${LAST_MAIN_JID:+ (afterok:$LAST_MAIN_JID)}"
+    echo "Submitted MAIN $i/$N_MAIN_JOBS: jobid=$JID${LAST_MAIN_JID:+ (afterany:$LAST_MAIN_JID)}"
     LAST_MAIN_JID="$JID"
 done
 
