@@ -125,9 +125,9 @@ MEGATRON_ARGS=(
     --eval-iters 0
     --optimizer ademamix
     --ademamix-beta3 0.9999
-    --ademamix-alpha 5
-    --ademamix-beta3-warmup -1
-    --ademamix-alpha-warmup -1
+    --ademamix-alpha 8
+    --ademamix-beta3-warmup 4578
+    --ademamix-alpha-warmup 4578
     --dataloader-type single
     --manual-gc
     --manual-gc-interval 50
@@ -137,9 +137,9 @@ MEGATRON_ARGS=(
     --attention-dropout 0.0
     --hidden-dropout 0.0
     --weight-decay 0.1
-    --clip-grad 1.0
+    --clip-grad 0.1
     --adam-beta1 0.9
-    --adam-beta2 0.95
+    --adam-beta2 0.999
     --lr 5e-4
     --min-lr 5e-5
     --lr-decay-style WSD
@@ -162,7 +162,7 @@ MEGATRON_ARGS=(
     --overlap-grad-reduce
     --save $CKPT_DIR
     --load $CKPT_DIR
-    --save-interval 4578
+    --save-interval 1000
     --ckpt-format torch_dist
     --log-throughput
     --log-progress
