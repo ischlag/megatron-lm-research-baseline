@@ -2334,7 +2334,7 @@ def _add_regularization_args(parser):
                        'muon. When unset, inherits --weight-decay. Set to 0 to disable '
                        'WD on the Adam group while keeping it on the Muon matrix group.')
     group.add_argument('--adaptive-muon-moment2-method', type=str, default='adamuon',
-                       choices=['adamuon', 'normuon'],
+                       choices=["adamuon", "normuon", "normuonfix"],
                        help='Second-moment accumulation method for adaptive_muon. '
                        '"normuon" applies per-row (neuron) normalisation after '
                        'Newton-Schulz (NorMuon, arXiv 2510.05491). Default "adamuon".')
@@ -2361,6 +2361,26 @@ def _add_regularization_args(parser):
                        help='Number of Newton-Schulz iterations inside Aurora\'s polar '
                        'function. Default 12 (Tilde reference); drives all input '
                        'singular values in (0, sqrt(2)) to ~1 within bf16 precision.')
+    # RMNP optimizer flags (Deng et al., 2026; arXiv 2603.20527). RMNP is
+    # Muon with row L2 normalization in place of Newton-Schulz; it reuses
+    # --muon-momentum / --muon-nesterov / --muon-scalar-* / --muon-extra-scale-factor
+    # / --muon-tp-mode via the shared 'muon' prefix in
+    # emerging_optimizers._rmnp_config_to_kwargs.
+    group.add_argument('--rmnp-eps', type=float, default=1e-7,
+                       help='Numerical-stability clamp on the row L2 norm denominator '
+                       'in RMNP\'s row normalization. Default 1e-7.')
+    # Muown / NorMuown optimizer flags (Lion et al., 2026; arXiv 2605.10797).
+    # Muown applies Muon to a 2D weight's direction and AdamW to its per-row
+    # magnitude (implicit weight-norm parameterization). NorMuown adds NorMuon-
+    # style per-row second-moment rescaling. Reuses --muon-momentum /
+    # --muon-nesterov / --muon-num-ns-steps / --muon-scalar-* / --adam-beta1
+    # / --adam-beta2 / --weight-decay for the shared knobs.
+    group.add_argument('--muown-eps', type=float, default=1e-8,
+                       help='Stability epsilon for the AdamW denominator on the '
+                       'per-row magnitude g in Muown / NorMuown. Default 1e-8.')
+    group.add_argument('--muown-normuon-beta2', type=float, default=0.95,
+                       help='EMA coefficient for the per-row second moment when '
+                       'NorMuown rescaling is enabled. Default 0.95.')
     group.add_argument('--lion-beta1', type=float, default=0.95,
                        help='First beta coefficient for Lion optimizer '
                        '(used in sign update). Default: 0.95.')
@@ -2583,7 +2603,7 @@ def _add_training_args(parser):
                        help='use FlashAttention implementation of attention. '
                        'https://arxiv.org/abs/2205.14135')
     group.add_argument('--optimizer', type=str, default='adam',
-                       choices=['adam', 'sgd', 'muon', 'dist_muon', 'lion', 'soap', 'adaptive_muon', 'aurora'],
+                       choices=['adam', 'sgd', 'muon', 'dist_muon', 'lion', 'soap', 'adaptive_muon', 'aurora', 'rmnp', 'muown', 'normuown'],
                        help='Optimizer function. '
                             'Note: dist_muon is deprecated; use --optimizer muon '
                             'with --use-distributed-optimizer instead.')
