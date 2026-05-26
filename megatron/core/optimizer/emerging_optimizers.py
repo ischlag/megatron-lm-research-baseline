@@ -475,6 +475,117 @@ def _default_adam_based_eopt_config_to_kwargs(
 
 
 # -----------------------------------------------------------------------
+# Master optimizer (Adam/AdEMAMix + optional Muon + L2 hypersphere clipping)
+# -----------------------------------------------------------------------
+def _is_nonlinear_for_master(param):
+    """Route only 1D params to Adam by default. 2D embedding/output params are
+    handled dynamically in _get_megatron_emerging_optimizer's master block —
+    they may stay in master (with hypersphere normalization, Adam branch) or
+    route to Adam, depending on config.hypersphere_embedding_mode."""
+    return len(param.shape) != 2
+
+
+def _master_init_state_fn(opt, config=None):
+    """Initialize MasterOptimizer state for torch_dist checkpoint compatibility."""
+    for group in opt.param_groups:
+        for p in group['params']:
+            if "exp_avg" not in opt.state[p]:
+                opt.state[p]["exp_avg"] = torch.zeros_like(p.data)
+                if not group.get("use_orthogonal_updates", False):
+                    if group.get("beta2", 0) != 0:
+                        opt.state[p]["exp_avg_sq"] = torch.zeros_like(p.data)
+                    if group.get("alpha", 0) != 0:
+                        opt.state[p]["exp_avg_slow"] = torch.zeros_like(p.data)
+
+
+def _master_config_to_kwargs(config, model_chunks, pg_collection) -> Dict[str, Any]:
+    """Convert OptimizerConfig to GainsMasterOptimizer constructor kwargs.
+
+    Also tags the `is_out_proj` attribute on transformer FC2 / linear_proj
+    weights (used by the `embed` hypersphere mode to pick row vs col).
+    `is_qkv` and `expert_tp` are tagged earlier in _get_megatron_emerging_optimizer.
+    """
+    # Tag is_out_proj. is_qkv/expert_tp already tagged upstream.
+    for model_chunk in model_chunks:
+        for name, param in model_chunk.named_parameters():
+            if not param.requires_grad:
+                continue
+            if ("linear_fc2" in name or "linear_proj" in name) and len(param.shape) == 2:
+                param.is_out_proj = True
+
+    model_cfg = model_chunks[0].config
+    qkv_split_shapes = _get_qkv_split_shapes(model_cfg)
+
+    matrix_lr = (config.matrix_lr if config.matrix_lr is not None
+                 else config.muon_lr_factor * (config.lr or 0.0))
+    return dict(
+        # Common.
+        lr=matrix_lr,
+        weight_decay=config.weight_decay,
+        # Adam / AdEMAMix.
+        betas=(config.adam_beta1, config.adam_beta2, config.ademamix_beta3),
+        alpha=config.ademamix_alpha,
+        beta3_warmup=config.ademamix_beta3_warmup,
+        alpha_warmup=config.ademamix_alpha_warmup,
+        eps=config.adam_eps,
+        # Hypersphere.
+        hypersphere_mode=config.hypersphere_mode,
+        hypersphere_embedding_mode=config.hypersphere_embedding_mode,
+        hypersphere_router_mode=config.hypersphere_router_mode,
+        hypersphere_tangential_grad=config.hypersphere_tangential_grad,
+        hypersphere_preserve_init=config.hypersphere_preserve_init,
+        hypersphere_scale_out_proj_init=config.hypersphere_scale_out_proj_init,
+        num_layers=model_cfg.num_layers,
+        # Muon.
+        use_orthogonal_updates=config.use_orthogonal_updates,
+        momentum_beta=config.muon_momentum,
+        use_nesterov=config.muon_nesterov,
+        split_qkv=config.muon_split_qkv,
+        is_qkv_fn=lambda p: getattr(p, "is_qkv", False),
+        qkv_split_shapes=qkv_split_shapes,
+        qkv_dim=model_cfg.kv_channels,
+        fp32_matmul_prec=config.muon_fp32_matmul_prec,
+        coefficient_type=config.muon_coefficient_type,
+        num_ns_steps=config.muon_num_ns_steps,
+        scale_mode=config.muon_scale_mode,
+        extra_scale_factor=config.muon_extra_scale_factor,
+        use_normuon=config.master_use_normuon,
+        normuon_beta2=config.master_normuon_beta2,
+        pg_collection=pg_collection,
+        tp_mode=config.muon_tp_mode,
+        # Gains. None → GainsMasterOptimizer behaves like plain MasterOptimizer.
+        hypersphere_gains_mode=config.hypersphere_gains_mode,
+        hypersphere_gains_mode_output=config.hypersphere_gains_mode_output,
+        hypersphere_gains_mode_embedding=config.hypersphere_gains_mode_embedding,
+        gains_lr=config.gains_lr if config.gains_lr is not None else config.lr,
+        gains_betas=(config.adam_beta1, config.adam_beta2),
+        gains_eps=config.adam_eps,
+        gains_weight_decay=config.weight_decay,
+        gain_parametrization=config.gain_parametrization,
+    )
+
+
+# Register master. Done unconditionally (no HAVE_EMERGING_OPTIMIZERS gate)
+# because GainsMasterOptimizer is importable even without emerging_optimizers
+# installed — only the use_orthogonal_updates=True code path requires it,
+# which fails fast at step time.
+from .master import GainsMasterOptimizer  # noqa: E402
+
+_EMERGING_OPTIMIZERS['master'] = EmergingOptimizerEntry(
+    optimizer_cls=GainsMasterOptimizer,
+    init_state_fn=_master_init_state_fn,
+    config_to_kwargs=_master_config_to_kwargs,
+    default_param_overrides={
+        ParamKey(
+            predicate=ParamPredicate(
+                name="nonlinear_for_master", fn=_is_nonlinear_for_master
+            )
+        ): {'optimizer': 'adam'}
+    },
+)
+
+
+# -----------------------------------------------------------------------
 # Register emerging optimizers
 # -----------------------------------------------------------------------
 _EMERGING_OPTIMIZERS.update(

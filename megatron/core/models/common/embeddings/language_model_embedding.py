@@ -131,6 +131,10 @@ class LanguageModelEmbedding(MegatronModule):
         if self.config.use_mup and self.config.mup_embedding_mult != 1.0:
             embeddings = embeddings * self.config.mup_embedding_mult
 
+        # Fixed (non-MuP) embedding scalar, e.g. sqrt(hidden_size).
+        if self.config.embedding_multiplier != 1.0:
+            embeddings = embeddings * self.config.embedding_multiplier
+
         # If the input flag for fp32 residual connection is set, convert for float.
         if self.config.fp32_residual_connection:
             embeddings = embeddings.float()

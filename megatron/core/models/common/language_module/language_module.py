@@ -211,13 +211,17 @@ class LanguageModule(MegatronModule):
         ):
             self.output_layer.weight.is_embedding_or_output_parameter = True
 
-        # Mark embedding-class parameters for MuP optimizer grouping.
-        # Under MuP table-8-style grouping, embeddings/output use base LR/eps while
-        # hidden matrix-like params use width-scaled LR/eps.
+        # Mark embedding-class parameters for MuP optimizer grouping AND for the
+        # master optimizer's embedding-LR / hypersphere routing. The embedding-side
+        # tag is unconditional (master needs it without MuP); the LM-head side stays
+        # MuP-gated (MuP intentionally groups LM head with embeddings) and master
+        # uses the separate is_output_parameter attribute below to find the LM head.
         mtp_process = getattr(self, 'mtp_process', False)
-        if self.config.use_mup and (self.pre_process or mtp_process) and hasattr(self, 'embedding'):
+        if (self.pre_process or mtp_process) and hasattr(self, 'embedding'):
             for param in self.embedding.parameters():
                 param.is_embedding_parameter = True
+        if self.post_process and hasattr(self, 'output_layer') and self.output_layer.weight is not None:
+            self.output_layer.weight.is_output_parameter = True
         if (
             self.config.use_mup
             and self.post_process

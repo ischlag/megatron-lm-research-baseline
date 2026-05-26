@@ -392,6 +392,16 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                         )
                         if hasattr(model_param, 'shared'):
                             shard_model_param.shared = model_param.shared
+                        # Propagate master-optimizer routing attrs not covered
+                        # by copy_tensor_model_parallel_attributes.
+                        for _attr in (
+                            'is_out_proj', 'is_router',
+                            'is_embedding_or_output_parameter',
+                            'is_embedding_parameter', 'is_output_parameter',
+                        ):
+                            if hasattr(model_param, _attr):
+                                setattr(shard_model_param, _attr,
+                                        getattr(model_param, _attr))
 
                     # Generate main param.
                     if not config.use_precision_aware_optimizer_no_fp8_or_ds_fp8:
@@ -422,6 +432,16 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                         )
                         if hasattr(model_param, 'shared'):
                             shard_main_param.shared = model_param.shared
+                        # Propagate master-optimizer routing attrs not covered
+                        # by copy_tensor_model_parallel_attributes.
+                        for _attr in (
+                            'is_out_proj', 'is_router',
+                            'is_embedding_or_output_parameter',
+                            'is_embedding_parameter', 'is_output_parameter',
+                        ):
+                            if hasattr(model_param, _attr):
+                                setattr(shard_main_param, _attr,
+                                        getattr(model_param, _attr))
                     else:
                         # When using precision-aware optimizer, main params are held by FusedAdam.
                         shard_main_param = None
@@ -445,6 +465,15 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
                     )
                     if hasattr(model_param, 'shared'):
                         shard_model_param.shared = model_param.shared
+                    # Propagate routing/identity attrs for emerging optimizers.
+                    for _attr in (
+                        'is_qkv', 'is_out_proj', 'is_router', 'expert_tp',
+                        'is_embedding_or_output_parameter',
+                        'is_embedding_parameter', 'is_output_parameter',
+                    ):
+                        if hasattr(model_param, _attr):
+                            setattr(shard_model_param, _attr,
+                                    getattr(model_param, _attr))
 
                 else:
                     raise TypeError(

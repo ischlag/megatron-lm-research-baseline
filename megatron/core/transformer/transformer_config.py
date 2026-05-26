@@ -471,6 +471,16 @@ class TransformerConfig(ModelParallelConfig):
     Default: 1.0 (no scaling).
     """
 
+    embedding_multiplier: float = 1.0
+    """
+    Fixed (non-MuP) scalar applied to the embedding output before the residual stream
+    (after the word/position add, before the fp32-residual cast). Typical use: set to
+    sqrt(hidden_size) to keep RMS ~= 1 going into layer 0 when embeddings are
+    initialized with std ~= 1/sqrt(hidden_size). Mutually exclusive with use_mup
+    (under MuP, use mup_embedding_mult instead).
+    Default: 1.0 (no scaling).
+    """
+
     mup_output_mult: float = 1.0
     """
     Multiplier for output logits before softmax. When MuP is enabled and this is left
@@ -1870,6 +1880,12 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.multi_latent_attention and self.rotary_interleaved:
             raise ValueError("rotary_interleaved does not work with multi_latent_attention.")
+
+        if self.embedding_multiplier != 1.0 and self.use_mup:
+            raise ValueError(
+                "embedding_multiplier is mutually exclusive with use_mup; "
+                "use mup_embedding_mult instead under MuP."
+            )
 
         # MuP (Maximal Update Parameterization) configuration
         if self.use_mup:

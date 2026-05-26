@@ -2302,10 +2302,12 @@ def _add_regularization_args(parser):
     group.add_argument('--muon-nesterov', action='store_true',
                        help='Whether to use Nesterov-style momentum in the internal SGD')
     group.add_argument('--muon-scale-mode', type=str, default='spectral',
-                       choices=['spectral', 'unit_rms_norm', 'shape_scaling'],
+                       choices=['spectral', 'unit_rms_norm', 'shape_scaling', 'shape_up'],
                        help='Scale mode for Muon optimizer. With MuP, set '
                        '--muon-scale-mode unit_rms_norm to use unit_rms_norm scaling, '
-                       'or set --muon-scale-mode spectral to keep spectral scaling.')
+                       'or set --muon-scale-mode spectral to keep spectral scaling. '
+                       "'shape_up' (= max(d_out/d_in, d_in/d_out)**0.5) is currently "
+                       'only consumed by --optimizer master.')
     group.add_argument('--muon-fp32-matmul-prec', type=str, default='medium',
                        choices=['low', 'medium', 'high'],
                        help='FP32 matmul precision for Newton-Schulz iteration')
@@ -2387,6 +2389,113 @@ def _add_regularization_args(parser):
     group.add_argument('--lion-beta2', type=float, default=0.98,
                        help='Second beta coefficient for Lion optimizer '
                        '(used in momentum EMA update). Default: 0.98.')
+
+    # Master optimizer (Adam/AdEMAMix + optional Muon orthogonalized updates +
+    # L2 hypersphere weight clipping + learnable per-axis gains). Flag-gated
+    # via --optimizer master. All defaults are off; existing runs are
+    # unaffected. Reuses --adam-beta1/--adam-beta2/--adam-eps/--muon-momentum/
+    # --muon-nesterov/--muon-no-split-qkv/--muon-scale-mode (incl. shape_up)/
+    # --muon-num-ns-steps/--muon-tp-mode/--muon-extra-scale-factor/
+    # --muon-coefficient-type/--muon-fp32-matmul-prec/--muon-scalar-lr/
+    # --muon-scalar-weight-decay/--weight-decay.
+    group.add_argument('--matrix-lr', type=float, default=None,
+                       help='Absolute LR for matrix (2D non-embedding/output) params '
+                       'under --optimizer master. Overrides muon_lr_factor * lr.')
+    group.add_argument('--embedding-lr-multiplier', type=float, default=None,
+                       help='LR multiplier for embedding/LM-head params under '
+                       '--optimizer master. Final max_lr = embedding_lr_multiplier * lr.')
+    group.add_argument('--master-min-lr-mode', type=str, default='relative',
+                       choices=['relative', 'absolute'],
+                       help='Under --optimizer master, how per-group min_lr is set. '
+                       '"relative" (default): every group decays by the same fraction '
+                       '(config.min_lr / config.lr), so min_lr = max_lr * ratio per '
+                       'group — schedule shape preserved, floors differ. '
+                       '"absolute": every group decays to the same floor (config.min_lr).')
+    group.add_argument('--muon-lr-factor', type=float, default=1.0,
+                       help='When --matrix-lr is unset, matrix-param LR for master is '
+                       'muon_lr_factor * lr. Default 1.0.')
+    group.add_argument('--hypersphere-mode', type=str, default=None,
+                       choices=['row', 'col', 'flat', 'embed'],
+                       help='Hypersphere normalization mode for non-embedding/output 2D '
+                       'matrices under --optimizer master. Applied post-step to project '
+                       'the weight onto the L2 sphere. None = off.')
+    group.add_argument('--hypersphere-embedding-mode', type=str, default=None,
+                       choices=['row', 'col', 'flat', 'embed', 'none'],
+                       help='Hypersphere mode override for embedding + LM head under '
+                       '--optimizer master. When set, those params stay in master (Adam '
+                       'branch) and get post-step normalization. When None, they route '
+                       'to external Adam with no hypersphere.')
+    group.add_argument('--hypersphere-router-mode', type=str, default=None,
+                       choices=['row', 'col', 'flat', 'embed', 'none'],
+                       help='Hypersphere mode override for MoE router weights under '
+                       '--optimizer master. When set, router 2D weights get post-step '
+                       'L2 projection in this mode. None disables router-specific '
+                       'normalization. Independent of --master-router-use-orthogonal-updates.')
+    group.add_argument('--hypersphere-tangential-grad', action='store_true', default=False,
+                       help='Project p.grad onto the hypersphere tangent space before '
+                       'Newton-Schulz (Muown-style grad_v construction). Only effective '
+                       'with --use-orthogonal-updates and an active hypersphere mode.')
+    group.add_argument('--hypersphere-preserve-init', action='store_true', default=False,
+                       help='Skip init-time hypersphere projection so the model init '
+                       'magnitude survives into training. When gains are configured '
+                       '(single-axis), gains absorb the per-axis init magnitude '
+                       '(Muown-style g = ||W[i]||).')
+    group.add_argument('--hypersphere-scale-out-proj-init', action='store_true', default=False,
+                       help='Scale the hypersphere target radius for is_out_proj params '
+                       '(linear_proj, linear_fc2) by 1/sqrt(multiplier * num_layers), '
+                       'matching scaled_init_method_normal (multiplier=1 for hybrid '
+                       'models, 2 otherwise). Keeps the hypersphere constraint '
+                       'consistent with Megatron depth-aware init for residual-out '
+                       'projections.')
+    group.add_argument('--master-router-use-orthogonal-updates',
+                       type=lambda s: {'true': True, 'false': False}[s.lower()],
+                       default=None, choices=[True, False],
+                       help='Per-param-group override for use_orthogonal_updates on MoE '
+                       'router weights under --optimizer master. "true" → force Muon for '
+                       'routers. "false" → force Adam branch for routers. Unset (default) '
+                       '→ routers follow --use-orthogonal-updates.')
+    group.add_argument('--hypersphere-gains-mode', type=str, default=None,
+                       choices=['row', 'col', 'rowcol', 'flat', 'embed'],
+                       help='Learnable per-axis gains for matrix params under master.')
+    group.add_argument('--hypersphere-gains-mode-output', type=str, default=None,
+                       choices=['row', 'col', 'rowcol', 'flat', 'none'],
+                       help='Gains mode override for the LM head under master. '
+                       "'none' disables gains for the LM head.")
+    group.add_argument('--hypersphere-gains-mode-embedding', type=str, default=None,
+                       choices=['row', 'col', 'rowcol', 'flat', 'none'],
+                       help='Gains mode override for the embedding under master.')
+    group.add_argument('--gains-lr', type=float, default=None,
+                       help='Absolute LR for the per-axis gains AdamW under '
+                       '--optimizer master. When unset, falls back to --lr. '
+                       'The gains LR is still multiplied each step by the '
+                       'scheduler ratio (current_lr / max_lr), so it tracks '
+                       'the schedule shape of the main LR.')
+    group.add_argument('--gain-parametrization', type=str, default='direct',
+                       choices=['direct', 'offset', 'softplus'],
+                       help='Reparametrize the stored gain g; effective multiplier '
+                       'is phi(g). "direct" (default) keeps phi(g)=g (legacy). '
+                       '"offset" uses phi(g)=1+g (raw gain centered at 0). '
+                       '"softplus" uses phi(g)=softplus(g) (always positive). '
+                       'Applied uniformly to row/col/flat gains.')
+    group.add_argument('--use-orthogonal-updates', action='store_true', default=False,
+                       help='Use Muon-style orthogonalized updates for matrix params '
+                       'under --optimizer master. Embedding + LM head ALWAYS use the '
+                       'Adam branch regardless of this flag.')
+    group.add_argument('--master-use-normuon', action='store_true', default=False,
+                       help='With --optimizer master --use-orthogonal-updates, apply '
+                       'NorMuon-style per-row 2nd-moment rescaling to the orthogonalized '
+                       'matrix update (norm-preserving). Default False.')
+    group.add_argument('--master-normuon-beta2', type=float, default=0.95,
+                       help='EMA coefficient for the per-row 2nd moment when '
+                       '--master-use-normuon is set. Default 0.95.')
+    group.add_argument('--ademamix-alpha', type=float, default=0.0,
+                       help='AdEMAMix slow-EMA mixing weight. 0.0 collapses to Adam.')
+    group.add_argument('--ademamix-beta3', type=float, default=0.9999,
+                       help='AdEMAMix slow-EMA coefficient (beta3).')
+    group.add_argument('--ademamix-alpha-warmup', type=int, default=None,
+                       help='Linear warmup steps for ademamix_alpha.')
+    group.add_argument('--ademamix-beta3-warmup', type=int, default=None,
+                       help='Half-life-linear warmup steps for ademamix_beta3.')
 
     group.add_argument('--no-weight-decay-cond-type', type=str, choices=['apply_wd_to_qk_layernorm'],
                        help='Type of no weight decay condition. Choices: '
@@ -2603,7 +2712,7 @@ def _add_training_args(parser):
                        help='use FlashAttention implementation of attention. '
                        'https://arxiv.org/abs/2205.14135')
     group.add_argument('--optimizer', type=str, default='adam',
-                       choices=['adam', 'sgd', 'muon', 'dist_muon', 'lion', 'soap', 'adaptive_muon', 'aurora', 'rmnp', 'muown', 'normuown'],
+                       choices=['adam', 'sgd', 'muon', 'dist_muon', 'lion', 'soap', 'adaptive_muon', 'aurora', 'rmnp', 'muown', 'normuown', 'master'],
                        help='Optimizer function. '
                             'Note: dist_muon is deprecated; use --optimizer muon '
                             'with --use-distributed-optimizer instead.')

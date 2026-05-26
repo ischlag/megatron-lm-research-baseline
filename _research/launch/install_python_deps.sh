@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 PKG_DIR=${1:?usage: install_python_deps.sh PKG_DIR}
-MARKER=$PKG_DIR/.deps_installed_v11
+MARKER=$PKG_DIR/.deps_installed_v14
 LOCK=$PKG_DIR/.install.lockdir
 
 mkdir -p "$PKG_DIR"
@@ -21,7 +21,7 @@ else
     INSTALL="pip install --quiet"
 fi
 
-$INSTALL --target="$PKG_DIR" transformers wandb omegaconf
+$INSTALL --target="$PKG_DIR" transformers==4.55.2 wandb omegaconf
 $INSTALL --no-deps --target="$PKG_DIR" \
     'git+https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git@v0.2.0'
 # fla-core is the actual implementation package (the meta-package
@@ -35,7 +35,7 @@ $INSTALL --no-deps --target="$PKG_DIR" 'fla-core==0.5.0'
 # Triton 3.4+ bug in chunk_bwd_dqkwg that produces incorrect gradients for
 # chunk_gated_delta_rule. Without tilelang the backward raises at iter 1.
 # See fla-org/flash-linear-attention#640.
-$INSTALL --target="$PKG_DIR" 'tilelang'
+# $INSTALL --target="$PKG_DIR" 'tilelang'
 
 # mamba_ssm + causal_conv1d for Mamba 2 / Mamba 3 baselines (state-spaces/mamba).
 # v2.3.1 ships Mamba 3 (March 2026 release). Both packages compile CUDA kernels
@@ -48,18 +48,18 @@ $INSTALL --target="$PKG_DIR" 'tilelang'
 # (which fails on ARM64 GH200 due to missing prebuilt wheels). The package
 # falls back to PyTorch/Triton paths inside the layer.
 # Capture stderr to a log file so failures aren't silently swallowed.
-MAMBA_LOG=$PKG_DIR/.mamba_install.log
-{
-    echo "=== causal_conv1d ==="
-    CAUSAL_CONV1D_SKIP_CUDA_BUILD=TRUE CAUSAL_CONV1D_FORCE_BUILD=FALSE \
-        pip install --target="$PKG_DIR" 'causal_conv1d>=1.5.0' 2>&1 || echo "[install failed: causal_conv1d]"
-    echo "=== mamba_ssm ==="
-    # --no-build-isolation: mamba_ssm's setup.py imports torch to read CUDA version,
-    # which fails inside pip's isolated build env (no torch there). Use system torch.
-    MAMBA_SKIP_CUDA_BUILD=TRUE MAMBA_FORCE_BUILD=FALSE \
-        pip install --no-build-isolation --target="$PKG_DIR" 'mamba_ssm>=2.3.1' 2>&1 || echo "[install failed: mamba_ssm]"
-} > "$MAMBA_LOG" 2>&1
-echo "Mamba install log: $MAMBA_LOG (tail -20):"
-tail -20 "$MAMBA_LOG" || true
+# MAMBA_LOG=$PKG_DIR/.mamba_install.log
+# {
+#     echo "=== causal_conv1d ==="
+#     CAUSAL_CONV1D_SKIP_CUDA_BUILD=TRUE CAUSAL_CONV1D_FORCE_BUILD=FALSE \
+#         pip install --target="$PKG_DIR" 'causal_conv1d>=1.5.0' 2>&1 || echo "[install failed: causal_conv1d]"
+#     echo "=== mamba_ssm ==="
+#     # --no-build-isolation: mamba_ssm's setup.py imports torch to read CUDA version,
+#     # which fails inside pip's isolated build env (no torch there). Use system torch.
+#     MAMBA_SKIP_CUDA_BUILD=TRUE MAMBA_FORCE_BUILD=FALSE \
+#         pip install --no-build-isolation --target="$PKG_DIR" 'mamba_ssm>=2.3.1' 2>&1 || echo "[install failed: mamba_ssm]"
+# } > "$MAMBA_LOG" 2>&1
+# echo "Mamba install log: $MAMBA_LOG (tail -20):"
+# tail -20 "$MAMBA_LOG" || true
 
 touch "$MARKER"

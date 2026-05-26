@@ -704,6 +704,17 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
                             tensor_parallel.copy_tensor_model_parallel_attributes(main_param, param)
                             if hasattr(param, 'shared'):
                                 main_param.shared = param.shared
+                            # Propagate routing/identity attributes used by the
+                            # master optimizer. (is_qkv / expert_tp are already
+                            # covered by copy_tensor_model_parallel_attributes
+                            # via _MODEL_PARALLEL_ATTRIBUTE_DEFAULTS.)
+                            for _attr in (
+                                'is_out_proj', 'is_router',
+                                'is_embedding_or_output_parameter',
+                                'is_embedding_parameter', 'is_output_parameter',
+                            ):
+                                if hasattr(param, _attr):
+                                    setattr(main_param, _attr, getattr(param, _attr))
                             # Replace the optimizer params with the new fp32 copy.
                             param_group['params'][i] = main_param
 
