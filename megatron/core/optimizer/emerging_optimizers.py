@@ -362,6 +362,164 @@ class TensorParallelAdaptiveMuon(TensorParallelMuon, AdaptiveMuon):
         return AdaptiveMuon.step(self, closure)
 
 
+class TensorParallelScion(OrthogonalizedOptimizer):
+    """Faithful multi-norm Scion (Pethick et al., norm-constrained LMOs, arXiv 2502.07529).
+
+    Each parameter group carries a ``norm`` string and a ``radius`` (the norm-ball
+    constraint scale rho); ``orthogonalize`` dispatches to one of three linear-
+    minimization oracles:
+
+      - ``spectral``  : Newton-Schulz orthogonalization * sqrt(d_out/d_in) * radius
+                        (hidden matrices; fused QKV is split per head first)
+      - ``sign``      : (1/d_in) * sign(g) * radius          (output head + embedding)
+      - ``bias_rms``  : g / rms(g) * radius                  (1-D norm gains)
+
+    The Frank-Wolfe constraint is the decoupled shrink ``p <- (1 - mu*lr)*p``. ``mu``
+    is stored on the instance and applied in ``_apply_weight_decay_inplace``, ignoring
+    the per-group ``weight_decay`` (which Megatron's scheduler overwrites every step).
+
+    Tensor parallelism: the Spectral oracle is TP-aware via ``newton_schulz_tp`` (the same
+    machinery as ``TensorParallelMuon``), controlled by ``tp_mode`` ("blockwise" = per-shard
+    NS, no comm; "duplicated"/"distributed" = exact). Sign and BiasRMS need no communication
+    (Sign's ``1/d_in`` uses the un-sharded hidden dim; BiasRMS params are replicated).
+    """
+
+    def __init__(
+        self,
+        params: ParamsT,
+        lr: float = 3e-4,
+        momentum: float = 0.9,
+        *,
+        constraint_coeff: float = 1.0,
+        fp32_matmul_prec: str = "medium",
+        coefficient_type: str = "quintic",
+        num_ns_steps: int = 5,
+        split_qkv: bool = True,
+        is_qkv_fn: Callable[[torch.Tensor], bool] | None = None,
+        qkv_split_shapes: tuple[int, int, int] | None = None,
+        eps: float = 1e-8,
+        tp_mode: Literal["blockwise", "duplicated", "distributed"] = "blockwise",
+        pg_collection: Optional[ProcessGroupCollection] = None,
+    ) -> None:
+        if num_ns_steps < 1:
+            raise ValueError(f"num_ns_steps must be at least 1, got {num_ns_steps}")
+
+        self.mu = constraint_coeff
+        self.scion_eps = eps
+        self.split_qkv = split_qkv
+        self.is_qkv_fn = is_qkv_fn
+        self.qkv_split_shapes = qkv_split_shapes
+        self.coefficient_type = coefficient_type
+        self.num_ns_steps = num_ns_steps
+        self.tp_mode = tp_mode
+        self.pg_collection = pg_collection
+
+        OrthogonalizedOptimizer.__init__(
+            self,
+            params,
+            lr,
+            momentum,
+            nesterov=False,
+            weight_decay=self.mu,
+            weight_decay_method="decoupled",
+            fp32_matmul_prec=fp32_matmul_prec,
+            # orthogonalize() is fully overridden below, so this is never called; pass a
+            # no-op (rather than None) to avoid the base class's "not provided" warning.
+            scaled_orthogonalize_fn=lambda g, *a, **k: g,
+        )
+
+    def _apply_weight_decay_inplace(
+        self, p: torch.Tensor, grad: torch.Tensor, lr: float, weight_decay: float
+    ) -> None:
+        """Apply the Frank-Wolfe constraint shrink using the instance ``mu``.
+
+        Ignores the passed-in ``weight_decay`` (the scheduler-mutated group value) so the
+        constraint coefficient cannot be silently changed by the LR/WD scheduler.
+        """
+        if self.mu != 0.0:
+            p.add_(p, alpha=-self.mu * lr)
+
+    def _spectral(
+        self,
+        grad: torch.Tensor,
+        radius: float,
+        tp_group=None,
+        partition_dim: int | None = None,
+    ) -> torch.Tensor:
+        size = [grad.size(-2), grad.size(-1)]
+        if partition_dim is not None:
+            size[partition_dim] *= get_pg_size(tp_group)
+        orth = newton_schulz_tp(
+            grad,
+            steps=self.num_ns_steps,
+            coefficient_type=self.coefficient_type,
+            tp_group=tp_group,
+            partition_dim=partition_dim,
+            tp_mode="duplicated" if self.tp_mode == "blockwise" else self.tp_mode,
+        )
+        scale = get_muon_scale_factor(size[0], size[1], mode="unit_rms_norm")
+        return orth * scale * radius
+
+    def _sign(self, grad: torch.Tensor, radius: float) -> torch.Tensor:
+        # Elementwise; (1/d_in) uses grad.size(-1). For the routed params (output head and
+        # token embedding, both vocab/column-parallel) the last dim is hidden = un-sharded,
+        # so this is globally correct with no communication.
+        d_in = grad.size(-1)
+        return radius * (1.0 / d_in) * torch.sign(grad)
+
+    def _bias_rms(self, grad: torch.Tensor, radius: float) -> torch.Tensor:
+        rms = grad.pow(2).mean(dim=0, keepdim=True).sqrt()
+        return radius * grad / (rms + self.scion_eps)
+
+    def orthogonalize(self, p: torch.Tensor, grad: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        """Apply the per-group norm oracle, scaled by the per-group radius."""
+        norm = kwargs.get("norm")
+        if norm is None:
+            raise ValueError(
+                "Scion parameter group has no 'norm'; every parameter must be routed to a "
+                "norm oracle. Check the scion branch in _get_megatron_emerging_optimizer."
+            )
+        radius = float(kwargs.get("radius", 1.0))
+
+        if norm == "sign":
+            return self._sign(grad, radius)
+        if norm == "bias_rms":
+            return self._bias_rms(grad, radius)
+        if norm != "spectral":
+            raise ValueError(f"Unknown scion norm '{norm}'")
+
+        # Spectral oracle (TP-aware, same plumbing as TensorParallelMuon).
+        if self.pg_collection is not None:
+            tp_group = (
+                self.pg_collection.expt_tp
+                if getattr(p, "expert_tp", False)
+                else self.pg_collection.tp
+            )
+        else:
+            tp_group = None
+        partition_dim = None if self.tp_mode == "blockwise" else getattr(p, "partition_dim", None)
+        if partition_dim == -1:
+            partition_dim = None
+
+        if self.split_qkv and self.is_qkv_fn is not None and self.is_qkv_fn(p):
+            grad_shape = grad.shape
+            num_query_groups = grad_shape[0] // sum(self.qkv_split_shapes)
+            qkv_grads = torch.split(
+                grad.view(num_query_groups, sum(self.qkv_split_shapes), -1),
+                self.qkv_split_shapes,
+                dim=1,
+            )
+            qkv_grads = [g.reshape(-1, grad_shape[-1]) for g in qkv_grads]
+            qkv_grads = [
+                self._spectral(g, radius, tp_group, partition_dim).view(
+                    num_query_groups, -1, grad_shape[-1]
+                )
+                for g in qkv_grads
+            ]
+            return torch.cat(qkv_grads, dim=1).view(grad_shape)
+        return self._spectral(grad, radius, tp_group, partition_dim)
+
+
 def _kwargs_from_config(optimizer_cls: type, prefix: str, config) -> Dict[str, Any]:
     """Match ``optimizer_cls.__init__`` parameters to config attributes.
 
@@ -417,6 +575,15 @@ def _aurora_config_to_kwargs(config, model_chunks, pg_collection) -> Dict[str, A
     return kwargs
 
 
+def _scion_config_to_kwargs(config, model_chunks, pg_collection) -> Dict[str, Any]:
+    """Convert OptimizerConfig to TensorParallelScion constructor kwargs."""
+    kwargs = _kwargs_from_config(TensorParallelScion, "scion", config)
+    kwargs["is_qkv_fn"] = lambda p: getattr(p, "is_qkv", False)
+    kwargs["qkv_split_shapes"] = _get_qkv_split_shapes(model_chunks[0].config)
+    kwargs["pg_collection"] = pg_collection
+    return kwargs
+
+
 def _default_adam_based_eopt_config_to_kwargs(
     eopt_name, config, model_chunks, pg_collection
 ) -> Dict[str, Any]:
@@ -466,6 +633,12 @@ _EMERGING_OPTIMIZERS.update(
                     )
                 ): {'optimizer': 'adam'}
             },
+        ),
+        "scion": EmergingOptimizerEntry(
+            optimizer_cls=TensorParallelScion,
+            init_state_fn=_eopt_init_state_fn,
+            config_to_kwargs=_scion_config_to_kwargs,
+            default_param_overrides={},
         ),
     }
 )
