@@ -911,6 +911,9 @@ def validate_args(args, defaults={}):
             '--overlap-param-gather only supported with distributed optimizer, megatron fsdp, or dist_muon'
         assert args.overlap_grad_reduce, \
             'Must use --overlap-param-gather with --overlap-grad-reduce'
+        assert args.optimizer != 'scion', \
+            '--overlap-param-gather corrupts Scion Newton-Schulz; omit it ' \
+            '(keep --use-distributed-optimizer + --overlap-grad-reduce).'
 
     if args.use_torch_fsdp2:
         assert is_torch_min_version("2.4.0"), \
@@ -2361,6 +2364,45 @@ def _add_regularization_args(parser):
                        help='Number of Newton-Schulz iterations inside Aurora\'s polar '
                        'function. Default 12 (Tilde reference); drives all input '
                        'singular values in (0, sqrt(2)) to ~1 within bf16 precision.')
+    # Scion optimizer flags (Pethick et al., norm-constrained LMO, arXiv 2502.07529).
+    # Faithful multi-norm Scion: Spectral hidden matrices, Sign head + embedding,
+    # BiasRMS norm gains. The per-layer "radius" is the norm-ball constraint scale rho.
+    group.add_argument('--scion-momentum', type=float, default=0.9,
+                       help='Momentum (standard EMA convention) for Scion. The canonical '
+                       'Scion stores 1-minus-momentum; here 0.9 == canonical 0.1 (the '
+                       'reference recipe value).')
+    group.add_argument('--scion-constraint-coeff', type=float, default=1.0,
+                       help='Frank-Wolfe constraint coefficient mu for Scion. 1.0 = fully '
+                       'constrained (weights kept inside the norm-ball); 0.0 = unconstrained. '
+                       'Applied as the decoupled shrink p *= (1 - mu*lr) and protected from '
+                       'the param scheduler.')
+    group.add_argument('--scion-coefficient-type', type=str, default='quintic',
+                       help='Newton-Schulz coefficient set for Scion\'s Spectral oracle. '
+                       'Default "quintic" matches Muon\'s NS for a fair comparison; '
+                       '"simple" is the single-tuple Scion-reference iteration.')
+    group.add_argument('--scion-num-ns-steps', type=int, default=5,
+                       help='Number of Newton-Schulz steps for Scion\'s Spectral oracle.')
+    group.add_argument('--scion-fp32-matmul-prec', type=str, default='medium',
+                       help='fp32 matmul precision for Scion\'s Newton-Schulz (medium = bf16).')
+    group.add_argument('--scion-no-split-qkv', action='store_false', default=True,
+                       dest='scion_split_qkv',
+                       help='Disable per-head splitting of the fused QKV weight before '
+                       'orthogonalization (splitting is on by default).')
+    group.add_argument('--scion-tp-mode', type=str, default='blockwise',
+                       choices=['blockwise', 'duplicated', 'distributed'],
+                       help='Tensor-parallel mode for Scion\'s Spectral Newton-Schulz: '
+                       '"blockwise" (per-shard, no comm; approximate), "duplicated" '
+                       '(all-gather, exact), or "distributed" (sharded NS, exact).')
+    group.add_argument('--scion-hidden-radius', type=float, default=50.0,
+                       help='Spectral norm-ball radius for hidden matrices (default 50, '
+                       'from modded-nanogpt).')
+    group.add_argument('--scion-head-radius', type=float, default=3000.0,
+                       help='Sign norm-ball radius for the output head (default 3000).')
+    group.add_argument('--scion-embed-radius', type=float, default=3000.0,
+                       help='Sign norm-ball radius for the token embedding (default 3000 = head; '
+                       'mirrors the tied reference recipe).')
+    group.add_argument('--scion-norm-radius', type=float, default=50.0,
+                       help='BiasRMS norm-ball radius for 1-D norm gains (default 50 = hidden).')
     group.add_argument('--lion-beta1', type=float, default=0.95,
                        help='First beta coefficient for Lion optimizer '
                        '(used in sign update). Default: 0.95.')
@@ -2583,7 +2625,7 @@ def _add_training_args(parser):
                        help='use FlashAttention implementation of attention. '
                        'https://arxiv.org/abs/2205.14135')
     group.add_argument('--optimizer', type=str, default='adam',
-                       choices=['adam', 'sgd', 'muon', 'dist_muon', 'lion', 'soap', 'adaptive_muon', 'aurora'],
+                       choices=['adam', 'sgd', 'muon', 'dist_muon', 'lion', 'soap', 'adaptive_muon', 'aurora', 'scion'],
                        help='Optimizer function. '
                             'Note: dist_muon is deprecated; use --optimizer muon '
                             'with --use-distributed-optimizer instead.')
