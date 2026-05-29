@@ -829,6 +829,41 @@ def _get_megatron_emerging_optimizer(
             )
             config_overrides[wd_key] = {'wd_mult': wd_mult}
 
+    # Scion: route each parameter class to its norm-oracle + per-layer radius. These extra
+    # keys (norm, radius) flow untouched through _get_param_groups into the optimizer's
+    # param_groups (the scheduler only writes lr / weight_decay). Each param matches exactly
+    # one rule, so combine_param_group_overrides never sees a conflicting value.
+    if eopt_name == 'scion':
+        _scion_hidden_radius = getattr(config, 'scion_hidden_radius', 50.0)
+        _scion_head_radius = getattr(config, 'scion_head_radius', 3000.0)
+        _scion_embed_radius = getattr(config, 'scion_embed_radius', 3000.0)
+        _scion_norm_radius = getattr(config, 'scion_norm_radius', 50.0)
+
+        def _scion_is_hidden_matrix(param):
+            return len(param.shape) == 2 and not getattr(
+                param, 'is_embedding_or_output_parameter', False
+            )
+
+        def _scion_is_one_d(param):
+            return len(param.shape) == 1
+
+        config_overrides[
+            ParamKey(predicate=ParamPredicate(name="scion_hidden", fn=_scion_is_hidden_matrix))
+        ] = {'optimizer': 'scion', 'norm': 'spectral', 'radius': _scion_hidden_radius}
+        config_overrides[ParamKey(name="*output_layer.weight")] = {
+            'optimizer': 'scion',
+            'norm': 'sign',
+            'radius': _scion_head_radius,
+        }
+        config_overrides[ParamKey(name="*word_embeddings.weight")] = {
+            'optimizer': 'scion',
+            'norm': 'sign',
+            'radius': _scion_embed_radius,
+        }
+        config_overrides[
+            ParamKey(predicate=ParamPredicate(name="scion_one_d", fn=_scion_is_one_d))
+        ] = {'optimizer': 'scion', 'norm': 'bias_rms', 'radius': _scion_norm_radius}
+
     # Build param groups and bucket by (optimizer_name, is_expert_parallel).
     # Layer-wise distributed optimizer handles expert params internally so we skip that split.
     all_param_groups = _get_param_groups(model_chunks, config, config_overrides)

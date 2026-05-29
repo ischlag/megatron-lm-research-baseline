@@ -343,6 +343,45 @@ class OptimizerConfig:
     aurora_num_ns_steps: int = 12
     """Newton-Schulz iterations inside Aurora's polar. Default 12 (Tilde)."""
 
+    # Scion (Pethick et al., 2502.07529): norm-constrained LMO optimizer.
+    scion_momentum: float = 0.9
+    """Momentum (standard EMA) for Scion; 0.9 == canonical Scion's 1-minus 0.1 (the
+    reference recipe value used by modded-nanogpt / shallow-nanogpt)."""
+
+    scion_constraint_coeff: float = 1.0
+    """Frank-Wolfe constraint coefficient mu (1=constrained, 0=unconstrained). Applied as the
+    decoupled shrink p*=(1-mu*lr); read from the optimizer instance, not the param group."""
+
+    scion_coefficient_type: str = "quintic"
+    """Newton-Schulz coefficient set for Scion's Spectral oracle. Default 'quintic' matches
+    Muon's NS (fair comparison); 'simple' is the single-tuple Scion-reference set."""
+
+    scion_num_ns_steps: int = 5
+    """Number of Newton-Schulz steps for Scion's Spectral oracle."""
+
+    scion_fp32_matmul_prec: str = "medium"
+    """fp32 matmul precision for Scion's Newton-Schulz (medium = bf16)."""
+
+    scion_split_qkv: bool = True
+    """Whether to split the fused QKV weight per head before orthogonalization."""
+
+    scion_tp_mode: str = "blockwise"
+    """Tensor-parallel mode for Scion's Spectral Newton-Schulz: 'blockwise' (per-shard, no
+    comm; approximate), 'duplicated' (all-gather full matrix, exact), or 'distributed'
+    (sharded NS with per-step Gram all-reduce, exact)."""
+
+    scion_hidden_radius: float = 50.0
+    """Spectral norm-ball radius for hidden matrices."""
+
+    scion_head_radius: float = 3000.0
+    """Sign norm-ball radius for the output head."""
+
+    scion_embed_radius: float = 3000.0
+    """Sign norm-ball radius for the token embedding (= head; mirrors the tied recipe)."""
+
+    scion_norm_radius: float = 50.0
+    """BiasRMS norm-ball radius for 1-D norm gains (= hidden)."""
+
     #######################
     # Distributed optimizer
     #######################
